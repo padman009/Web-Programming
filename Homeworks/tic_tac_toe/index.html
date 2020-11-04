@@ -8,28 +8,14 @@
     <link rel='stylesheet' type='text/css' media='screen' href='styles.css'>
 </head>
 <body>
-    <header class="name">Tic Tac Toe</header>
-    <div class="game_info">
-        <curr id="curr_player">X</curr> MOVES
+    <div class="gameInfo">
+        <header class="name">Tic Tac Toe</header>
+        <curr id="currPlayer">X</curr> MOVES
+        <div class="winnerInfo">Winner X</div>
     </div>
-    <div class="winner_info">Winner X</div>
-    <table id="table">
-        <tr>
-            <td class="block" id="x0y0"></td>
-            <td class="block x1" id="x1y0"></td>
-            <td class="block" id="x2y0"></td>
-        </tr>
-        <tr id="y1">
-            <td class="block" id="x0y0"></td>
-            <td class="block x1" id="x1y0"></td>
-            <td class="block" id="x2y0"></td>
-        </tr>
-        <tr>
-            <td class="block" id="x0y0"></td>
-            <td class="block x1" id="x1y0"></td>
-            <td class="block" id="x2y0"></td>
-        </tr>
-    </table>
+    <div id="canWrapper">
+        <canvas id="gameField"></canvas>
+    </div>
     <script src='script.js'></script>
 </body>
 </html>

@@ -1,46 +1,19 @@
+body{
+	margin: 0px;
+}
 header {
-	margin: auto;
-	text-align: center;
 	font-size: 70px;
 	font-weight: bold;
 	font-family: Calibri;
 }
-.game_info {
-	margin: 50px auto;
+.gameInfo {
+	margin: 0px auto 50px;
 	text-align: center;
 	font-size: 50px;
 	font-weight: 500;
 	font-family: Roboto;
 }
-.winner_info {
+.winnerInfo {
 	text-align: center;
 	display: none;
-}
-table {
-	margin: auto;
-	width: 60vh;
-	height: 60vh;
-	border-spacing: 10px;
-}
-tr {
-	margin: auto;
-	height: 30%;
-	width: 90%;
-	display: block;
-}
-#y1 {
-	border-color: gray;
-	border-width: 10px;
-	border-style: solid none;
-	height: 34%;
-}
-td {
-	display: inline-block;
-	height: 100%;
-	width: 30%;
-}
-.x1 {
-	border-color: gray;
-	border-width: 10px;
-	border-style: none solid;
 }
