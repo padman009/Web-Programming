@@ -2,10 +2,12 @@ var playerX = {
 		name: "X",
 		value:1
 	},
+
 	playerO = {
 		name: "O",
 		value:-1
 	},
+
 	winCombinations = [
 		[0, 1, 2],
 		[3, 4, 5],
@@ -16,17 +18,23 @@ var playerX = {
 		[0, 4, 8],
 		[2, 4, 6],
 	],
+	
 	blocks = [],
-	size = Math.min(window.innerWidth, window.innerHeight) / 1.6,
-	blockSize = size / 3,
-	lineWidth = blockSize / 16,
+
 	curr = document.getElementById("currPlayer"),
+	withAi = false,
+	gameRun = false,
+	
 	canvas = document.getElementById("gameField")
 	context = canvas.getContext("2d");
+	
+	size = Math.min(window.innerWidth / 1.6, (window.innerHeight - canvas.getBoundingClientRect().y) * 0.95),
+	blockSize = size / 3,
+	lineWidth = blockSize / 16,
 	marginLeft = (window.innerWidth - size) / 2,
 	centeredField = function(){
 		marginLeft = (window.innerWidth - size) / 2;
-		canvas.setAttribute("style", `margin:0px ${marginLeft}px;position:absolute;top:200px;` );
+		canvas.setAttribute("style", `margin:0px ${marginLeft}px;` );
 	};
 
 canvas.setAttribute("width", size);
@@ -34,7 +42,9 @@ canvas.setAttribute("height", size);
 
 canvas.addEventListener("click", function(event){
 	let [x, y] = [Math.floor((event.x - canvas.getBoundingClientRect().x) / blockSize), Math.floor((event.y - canvas.getBoundingClientRect().y) / blockSize)];
-	click(blocks[(3 * y) + x]);
+	click((3 * y) + x);
+
+	setTimeout(function(){if(withAi) clicked((3 * y) + x);}, 10);
 });
 
 centeredField();
@@ -42,8 +52,21 @@ window.addEventListener("resize", ()=>centeredField());
 
 window.addEventListener("keypress", function (e) {
 	if (e.key > 0 && e.key < 10) {
-		click(blocks[e.key - 1]);
+		click(e.key - 1);
+		
+		setTimeout(function(){if(withAi) clicked(e.key - 1);}, 10);
 	}
+});
+
+document.getElementById("turnGameMode").addEventListener("click",function(){
+	if(gameRun) return;
+	withAi = !withAi;
+	document.getElementById("HU").style.display = (withAi)?"none":"inline-block";
+	document.getElementById("AI").style.display = (withAi)?"inline-block":"none";
+});
+
+document.getElementById("endGame").addEventListener("click", function() {
+	end({name:"no"});
 });
 
 start();
@@ -70,7 +93,8 @@ function drawLines(){
 	}
 }
 
-function click(element) {
+function click(index) {
+	let element = blocks[index];
 	if (element[2] !== 0) {
 		return;
 	}
@@ -78,6 +102,7 @@ function click(element) {
 	let [playerO_count, playerX_count] = countPoints();
 	if(playerO_count + playerX_count == 0){
 		drawLines();
+		gameRun = true;
 	}
 	set(element, playerX_count == playerO_count ? playerX : playerO);
 	
@@ -125,26 +150,20 @@ function checkOwerflow() {
 		for(var z = 0;z < blocks.length;z++){
 			if(blocks[z][2] === 0) break;
 		}
-		console.log(z);
 		blocks[z][2]=1;
 		let winner = identifyWinner();
 		if (winner.name !== "no") {
 			end(winner);
-		}else{
-			blocks[z][2]=-1;
-			winner = identifyWinner();
-			if (winner.name !== "no") {
-				end(winner);
-			}else{
-				blocks[z][2] = 0;
-			}
 		}
-
+		else{ 
+			blocks[z][2]=0;
+		}
 	}
 }
 
 function end(winner) {
 	setTimeout(function(){
+		gameRun = false;
 		alert(winner.name=="no"?"Draw":`Winner ${winner.name}`);
 		start();
 	} ,50);

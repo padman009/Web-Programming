@@ -8,14 +8,21 @@
     <link rel='stylesheet' type='text/css' media='screen' href='styles.css'>
 </head>
 <body>
+    <header>Tic Tac Toe</header>
     <div class="gameInfo">
-        <header class="name">Tic Tac Toe</header>
         <curr id="currPlayer">X</curr> MOVES
-        <div class="winnerInfo">Winner X</div>
+        <div id="gameMode">
+            Game Mode:
+            <p style="display: inline-block;" id="HU">HUMAN</p>
+            <p style="display: none;" id="AI">BOT</p><br>
+            <button class="btn btn-dark btn-lg" id="turnGameMode" style="margin-bottom:20px;padding:0.5rem 2rem;">Turn</button>
+            <button class="btn btn-danger btn-lg" id="endGame" style="margin-bottom:20px;padding:0.5rem 2rem;">End Game</button>
+        </div>
     </div>
-    <div id="canWrapper">
+    <div id="canvasWrapper">
         <canvas id="gameField"></canvas>
     </div>
     <script src='script.js'></script>
+    <script src='ai.js'></script>
 </body>
 </html>
