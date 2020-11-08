@@ -66,7 +66,7 @@ document.getElementById("turnGameMode").addEventListener("click",function(){
 });
 
 document.getElementById("endGame").addEventListener("click", function() {
-	end({name:"no"});
+	if(gameRun) end({name:"no"});
 });
 
 start();
