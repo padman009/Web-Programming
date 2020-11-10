@@ -28,7 +28,7 @@ var playerX = {
 	canvas = document.getElementById("gameField")
 	context = canvas.getContext("2d");
 	
-	size = Math.min(window.innerWidth / 1.6, (window.innerHeight - canvas.getBoundingClientRect().y) * 0.95),
+	size = Math.min(window.innerWidth, window.innerHeight) / 1.6,
 	blockSize = size / 3,
 	lineWidth = blockSize / 16,
 	marginLeft = (window.innerWidth - size) / 2,
@@ -95,6 +95,7 @@ function drawLines(){
 
 function click(index) {
 	let element = blocks[index];
+	console.log(index+" "+element)
 	if (element[2] !== 0) {
 		return;
 	}
@@ -110,7 +111,7 @@ function click(index) {
 	if (winner.name !== "no") {
 		end(winner);
 	}else{
-		checkOwerflow();
+		checkOverflow();
 	}
 }
 
@@ -141,7 +142,7 @@ function identifyWinner(){
 	return  {name: name};
 }
 
-function checkOwerflow() {
+function checkOverflow() {
 	let [playerO_count, playerX_count] = countPoints();
 	if (playerX_count + playerO_count === 9) {
 		end({ name: "no" });
@@ -150,14 +151,7 @@ function checkOwerflow() {
 		for(var z = 0;z < blocks.length;z++){
 			if(blocks[z][2] === 0) break;
 		}
-		blocks[z][2]=1;
-		let winner = identifyWinner();
-		if (winner.name !== "no") {
-			end(winner);
-		}
-		else{ 
-			blocks[z][2]=0;
-		}
+		click(z);
 	}
 }
 

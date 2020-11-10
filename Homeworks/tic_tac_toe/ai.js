@@ -27,5 +27,7 @@ function clicked(index){
         return false;
     });
     
-    click(step);
+    if(step > 0){
+        click(step);
+    }
 }
