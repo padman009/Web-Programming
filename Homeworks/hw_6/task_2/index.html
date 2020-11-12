@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+    <title>Task 2</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <link href="https://getbootstrap.com/docs/4.5/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous">
+</head>
+<body style="font-size: x-large;">
+    <div class="container" style="max-width:540px;margin:50px auto;">
+        <div style="border: ridge;padding: 10px;">
+            <div class="form-group">
+                <label for="temperature" class="col-form-label">Enter Temperature:</label>
+                <input type="text" id="temperature" class="form-control">
+            </div>
+            <div id="btn-container">
+                <button class="btn btn-secondary" onclick="calculate('cf')">Celsius to Fahrenheit</button>
+                <button class="btn btn-secondary" onclick="calculate('fc')">Fahrenheit to Celsius</button>
+            </div>
+            <br>
+            <div>
+                <p id="result"></p>
+            </div>
+        </div>
+    </div>
+    <script src='main.js'></script>
+</body>
+</html>
