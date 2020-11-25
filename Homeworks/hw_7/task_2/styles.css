@@ -1,0 +1,40 @@
+body{
+	margin: 0px;
+}
+
+.container{
+	margin: 0px 20%;
+	background-color: #fff;
+	text-align: left;
+}
+
+textarea.border{
+	width: 94%;
+	height: 60vh;
+	resize: none;
+	background-color: white;
+	font-size: 30px;
+}
+
+h1{
+	width: 45%;
+	display: inline-block;
+	font-family: sans-serif;
+	font-weight: 100;
+	font-size: 50px;
+	margin-left: 4%;
+}
+
+.border{
+	border: groove;
+	margin: 10px 2.5%;
+	background: #f1f1f1;
+}
+
+.header {
+	font-size: 120px;
+	font-weight: bold;
+	font-family: Calibri;
+	text-align: center;
+	color: rgb(0, 0, 160);
+}

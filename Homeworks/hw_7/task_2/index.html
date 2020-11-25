@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8'>
+    <meta http-equiv='X-UA-Compatible' content='IE=edge'>
+    <title>Word - Counter</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1'>
+    <!-- <link href="https://getbootstrap.com/docs/4.5/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-TX8t27EcRE3e/ihU7zmQxVncDAy5uIKz4rEkgIXeMed4M0jlfIDPvg6uqKI2xXr2" crossorigin="anonymous"> -->
+    <link href="styles.css" rel="stylesheet">
+</head>
+<body style="background-color: red;">
+    <div class="container" style="border-bottom: inset;" id="main">
+        <div class="header">Word Counter</div>
+
+        <textarea class="border" name="" id="textarea" ></textarea>
+
+        <div class="border container">
+            <h1>Characters: <b id="Characters"></b></h1>
+            <h1>Words: <b id="Words"></b></h1>
+        </div>
+
+        <div class="border container">
+            <h1>Sentences: <b id="Sentences"></b></h1>
+            <h1>Paragraphs: <b id="Paragraphs"></b></h1>
+        </div>
+
+        <div class="border container">
+            <h1>Reading Time: <b id="ReadingTime"></b></h1>
+        </div>
+    </div>
+    <script src='main.js'></script>
+</body>
+</html>
