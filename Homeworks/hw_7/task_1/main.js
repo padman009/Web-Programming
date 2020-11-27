@@ -22,7 +22,7 @@ function beforeDown(width, height, canvas) {
     
     let verCenterLine = height / 2;
 
-    let text = 'Countdown to New Year Party !';
+    let text = `Countdown to ${new Date(targetTime).toLocaleDateString()}!`;
     let textWidth = getTextWidth(text, textFontSize);;
     
     let ctx = canvas.getContext('2d');
