@@ -1,0 +1,10 @@
+[
+    {
+        "question":"What is CMS?",
+        "answers":["Content Managed System", "Content Mixing System", "Creative Management System", "Creatives Managerial System"]
+    },
+    {
+        "question":"To make your website mobile friendly, you can make your website?",
+        "answers":["Responsive", "Reactive", "Fast loading", "Light"]
+    }
+]
