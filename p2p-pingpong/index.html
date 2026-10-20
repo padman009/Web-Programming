@@ -118,6 +118,25 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 .overlay .btn{pointer-events:auto}
 .overlay p{margin:0;color:var(--muted);font-size:1.15rem}
 .count{font:800 min(40vw,40dvh,200px)/1 system-ui;color:var(--accent)}
+/* пауза: лёгкое затемнение, кнопка и панель стоят в пустых полях рядом с полем (позиции считает placeUI), а если места нет — поверх поля */
+#dim{position:absolute;inset:0;background:rgba(5,7,10,.5);pointer-events:none}
+.pmini{position:absolute;width:44px;height:44px;padding:0;display:grid;place-items:center;border-radius:12px;border:1px solid var(--line);background:rgba(21,27,35,.75);color:var(--text);cursor:pointer}
+.pmini.over{opacity:.55}
+.pause{position:absolute;width:min(280px,calc(100% - 32px));padding:20px 16px;border-radius:18px;background:rgba(21,27,35,.94);border:1px solid var(--line);text-align:center;display:grid;gap:12px}
+.pause.mid{left:50%;top:50%;transform:translate(-50%,-50%)}
+.pause.side{top:50%;transform:translateY(-50%)}
+.pause h2{margin:0;font-size:1.4rem}
+.pscore{display:flex;justify-content:center;align-items:flex-start;gap:18px}
+.pscore div{display:grid;justify-items:center;gap:4px;min-width:84px}
+.pscore b{font:800 2.6rem/1 system-ui}
+.pscore span,.plead{color:var(--muted);font-size:.9rem}
+.pscore i{font:800 2.6rem/1 system-ui;font-style:normal;color:var(--muted)}
+.plead{margin:0}
+.pbtns{display:flex;justify-content:center;gap:16px;margin-top:4px}
+.pbtn{display:grid;justify-items:center;align-content:start;gap:8px;width:112px;padding:0;background:none;border:0;color:var(--text);font:inherit;font-size:.9rem;line-height:1.25;cursor:pointer}
+.pbtn .ic{width:68px;height:68px;border-radius:50%;display:grid;place-items:center;background:var(--card);border:1px solid var(--line)}
+.pbtn.go .ic{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.pbtn:hover .ic{filter:brightness(1.12)}
 </style>
 </head>
 <body>
@@ -135,6 +154,17 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 <div id="game" hidden>
   <canvas id="cv" aria-label="Игровое поле"></canvas>
   <div class="hint" id="hint">Ваша ракетка внизу — ведите пальцем или мышью</div>
+  <div id="dim" hidden></div>
+  <section class="pause mid" id="pause" hidden role="dialog" aria-labelledby="ptitle">
+    <h2 id="ptitle">Пауза</h2>
+    <div class="pscore"><div><b id="psme">0</b><span>Вы</span></div><i>:</i><div><b id="psfoe">0</b><span>Соперник</span></div></div>
+    <p class="plead" id="plead"></p>
+    <div class="pbtns">
+      <button class="pbtn go" id="presume"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span>Продолжить игру</button>
+      <button class="pbtn" id="pexit"><span class="ic"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span>Выйти из игры</button>
+    </div>
+  </section>
+  <button class="pmini" id="pausebtn" hidden aria-label="Пауза"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
   <div class="overlay" id="ov" hidden role="status" aria-live="assertive">
     <div class="count" id="ovbig"></div><p id="ovtxt"></p>
     <button class="btn primary" id="ovbtn" hidden>В меню</button>
@@ -685,7 +715,7 @@ const C = {
   K: 1.05,            // ускорение на каждом ударе, без потолка
   MAXANG: 55 * Math.PI / 180, STEP: 1 / 120, MAXF: 0.1, COUNT: 3, MAXIT: 64
 };
-const PHASE = { WAIT: 0, COUNT: 1, PLAY: 2, PAUSE: 3 };
+const PHASE = { WAIT: 0, COUNT: 1, PLAY: 2, PAUSE: 3, AWAY: 4 };   // PAUSE — игрок нажал паузу, AWAY — кто-то свернул вкладку
 const planeB = C.H - C.GAP - C.PH - C.R, planeT = C.GAP + C.PH + C.R;   // где центр мяча касается ракетки
 const clampPad = x => Math.max(C.PW / 2, Math.min(C.W - C.PW / 2, x));
 const r1 = v => Math.round(v * 10) / 10;
@@ -719,17 +749,21 @@ function advance(b, dt, pads, evs) {
   }
 }
 
-let G = null, raf = 0, ovKey = '';
+let G = null, raf = 0, ovKey = '', pauseOn = false, canPause = false;
 const DASH = [8, 8], NODASH = [];
 const cv = $('#cv'), g = cv.getContext('2d', { alpha: false }), fit = { s: 1, ox: 0, oy: 0, dpr: 1, left: 0 };
 
-function startCountdown() { G.phase = PHASE.COUNT; G.cd = C.COUNT; Object.assign(G.ball, { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }); G.dirty = true; }
+function startCountdown() { G.phase = PHASE.COUNT; G.cd = C.COUNT; G.resume = false; Object.assign(G.ball, { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }); G.dirty = true; }
 function launch() {   // подача на проигравшего, угол 8..30° от вертикали, скорость строго V0
   const a = (Math.random() < .5 ? -1 : 1) * (8 + Math.random() * 22) * Math.PI / 180;
   G.ball.vx = C.V0 * Math.sin(a); G.ball.vy = G.serveDir * C.V0 * Math.cos(a); G.phase = PHASE.PLAY; G.cd = 0; G.dirty = true;
 }
 function step(dt) {   // один фиксированный шаг физики (хост)
-  if (G.phase === PHASE.COUNT) { G.cd -= dt; if (G.cd <= 0) launch(); return; }
+  if (G.phase === PHASE.COUNT) {
+    G.cd -= dt;
+    if (G.cd <= 0) { if (G.resume) { G.resume = false; G.phase = PHASE.PLAY; G.dirty = true; } else launch(); }   // после паузы розыгрыш продолжается с того же места
+    return;
+  }
   if (G.phase !== PHASE.PLAY) return;
   const evs = []; advance(G.ball, dt, G.pads, evs);
   if (evs.length) G.dirty = true;
@@ -738,10 +772,11 @@ function step(dt) {   // один фиксированный шаг физики
     else if (e === 'goalT') { G.score[0]++; G.serveDir = -1; startCountdown(); }
   }
 }
-function updatePause() {   // хост: пауза, пока кто-то из игроков свернул вкладку
+function updatePause() {   // хост: игра стоит, пока кто-то нажал паузу (G.paused) или свернул вкладку
   if (G.phase === PHASE.WAIT) return;
-  if (G.foeAway || document.hidden) { if (G.phase !== PHASE.PAUSE) { G.phase = PHASE.PAUSE; G.dirty = true; } }
-  else if (G.phase === PHASE.PAUSE) startCountdown();
+  const want = G.paused ? PHASE.PAUSE : (G.foeAway || document.hidden) ? PHASE.AWAY : 0, stopped = G.phase === PHASE.PAUSE || G.phase === PHASE.AWAY;
+  if (want) { if (G.phase !== want) { if (G.phase === PHASE.PLAY) G.resume = true; G.phase = want; G.dirty = true; } }
+  else if (stopped) { G.phase = PHASE.COUNT; G.cd = C.COUNT; G.dirty = true; }   // отсчёт 3-2-1 и дальше с того же места
 }
 
 /* сообщения: состояние (хост -> клиент) [seq, bx, by, vx, vy, hostPad, phase, scoreHost, scoreClient, cd]; ввод (клиент -> хост) [pad] в системе координат хоста */
@@ -752,6 +787,7 @@ function onState(m) {
 }
 function onControl(s) {
   if (s === 'bye') showLost('Соперник вышел из игры');
+  else if (s === 'pause' || s === 'resume') { if (G.host) { G.paused = s === 'pause'; updatePause(); } }
   else { G.foeAway = s === 'away'; if (G.host) updatePause(); }   // 'away' | 'back'
 }
 function sendState() {
@@ -769,6 +805,17 @@ function resize() {
   const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }   // присваивание сбрасывает буфер — только при смене размера
   Object.assign(fit, { s, dpr, left: r.left, ox: (r.width - C.W * s) / 2, oy: (r.height - C.H * s) / 2 });
+  placeUI(r);
+}
+/* Кнопка паузы и панель паузы: в пустых полях рядом с полем, если там хватает места, иначе поверх поля по центру */
+function placeUI(r) {
+  const fieldR = r.left + fit.ox + C.W * fit.s, room = fit.ox, bs = 44, gap = 8, side = room >= 280 + 24, btn = $('#pausebtn');
+  $('#pause').className = 'pause ' + (side ? 'side' : 'mid');
+  $('#pause').style.left = side ? fieldR + (room - 280) / 2 + 'px' : '';
+  let x = fieldR - bs - 6, y = r.top + r.height / 2 - bs / 2, over = true;   // нет места ни сбоку, ни сверху: поверх поля у края на средней линии
+  if (room >= bs + 2 * gap) { x = fieldR + (room - bs) / 2; over = false; }
+  else if (fit.oy >= bs + 2 * gap) { x = fieldR - bs - gap; y = r.top + (fit.oy - bs) / 2; over = false; }
+  btn.style.left = x + 'px'; btn.style.top = y + 'px'; btn.classList.toggle('over', over);
 }
 new ResizeObserver(() => { if (G) resize(); }).observe(cv);
 
@@ -787,16 +834,38 @@ function setOv(big, txt, btn) {   // txt === null — скрыть
   $('#ov').hidden = txt === null; $('#ovbig').textContent = big || ''; $('#ovtxt').textContent = txt || ''; $('#ovbtn').hidden = !btn;
   if (btn) $('#ovbtn').focus();
 }
-function showLost(msg) { if (!G || G.lost) return; dlog('игра остановлена: ' + msg); G.lost = true; cancelAnimationFrame(raf); setOv('', msg, true); }
+function showLost(msg) { if (!G || G.lost) return; dlog('игра остановлена: ' + msg); G.lost = true; hidePauseUI(); cancelAnimationFrame(raf); setOv('', msg, true); }
 function exitGame() { G = null; cancelAnimationFrame(raf); $('#game').hidden = true; $('#app').hidden = false; resetAll(); }
 $('#ovbtn').onclick = exitGame;
 
+/* пауза: ставит и снимает любой игрок. Решает хост (G.paused); клиент просит по каналу событий */
+function requestPause(on) { if (G.host) { G.paused = on; updatePause(); } else sendC(on ? 'pause' : 'resume'); }
+function hidePauseUI() { pauseOn = canPause = false; $('#pause').hidden = $('#dim').hidden = $('#pausebtn').hidden = true; }
+function setPauseUI() {
+  const can = G.phase === PHASE.COUNT || G.phase === PHASE.PLAY, on = G.phase === PHASE.PAUSE;
+  if (can !== canPause) { canPause = can; $('#pausebtn').hidden = !can; }
+  if (on === pauseOn) return;
+  pauseOn = on; $('#pause').hidden = $('#dim').hidden = !on;
+  if (!on) return;
+  const me = G.score[G.host ? 0 : 1], foe = G.score[G.host ? 1 : 0];
+  $('#psme').textContent = me; $('#psfoe').textContent = foe;
+  $('#plead').textContent = me === foe ? 'Ничья' : me > foe ? 'Вы выигрываете' : 'Соперник выигрывает';
+  $('#presume').focus();
+}
+$('#pausebtn').onclick = () => requestPause(true);
+$('#presume').onclick = () => requestPause(false);
+$('#pexit').onclick = () => { sendC('bye'); setTimeout(exitGame, 120); };   // даём 'bye' уйти, пока соединение не закрыто
+addEventListener('keydown', e => {   // Esc или P (по коду клавиши — работает и в русской раскладке)
+  if (!G || G.lost || e.repeat || (e.code !== 'Escape' && e.code !== 'KeyP')) return;
+  if (pauseOn) requestPause(false); else if (canPause) requestPause(true);
+});
+
 function startGame(host) {
   $('#app').hidden = true; $('#game').hidden = false; resize();
-  G = { host, me: host ? 'bot' : 'top', phase: PHASE.WAIT, cd: 0, score: [0, 0], serveDir: 1, seq: 0, dirty: false, lost: false, foeAway: false,
+  G = { host, me: host ? 'bot' : 'top', phase: PHASE.WAIT, cd: 0, score: [0, 0], serveDir: 1, seq: 0, dirty: false, lost: false, foeAway: false, paused: false, resume: false,
     ball: { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }, pads: { bot: C.W / 2, top: C.W / 2 }, oppX: C.W / 2,   // oppX — сглаженная ракетка соперника
     rx: performance.now(), last: performance.now(), acc: 0, lastSend: 0, sentPad: -1 };
-  ovKey = '';
+  ovKey = ''; hidePauseUI();
   $('#hint').classList.remove('off'); setTimeout(() => $('#hint').classList.add('off'), 4000);
   cancelAnimationFrame(raf); raf = requestAnimationFrame(frame);
 }
@@ -811,9 +880,10 @@ function frame(now) {
   netTick(now);
   if (G.lost) return;
   if (G.phase === PHASE.COUNT) setOv(Math.ceil(G.cd), 'Приготовьтесь');
-  else if (G.phase === PHASE.PAUSE) setOv('', 'Пауза');
+  else if (G.phase === PHASE.AWAY) setOv('', 'Пауза: соперник свернул игру');
   else if (G.phase === PHASE.WAIT) setOv('', 'Ждём соперника…');
   else setOv('', null);
+  setPauseUI();
   draw();
 }
 
