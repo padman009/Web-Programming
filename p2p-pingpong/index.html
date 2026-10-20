@@ -9,7 +9,7 @@
 <style>
 :root{
   --bg:#0b0f14; --card:#151b23; --line:#2a3445; --text:#eef2f7; --muted:#9aa7b8;
-  --accent:#2ee6c5; --accent-ink:#04201a; --danger:#ff6b81; --ok:#5be38b; --foe:#ff4d8d;
+  --accent:#2ee6c5; --accent-ink:#04201a; --danger:#ff6b81;
   --vis:min(80vw,70dvh,440px);          /* размер QR / видео */
   --pad:16px;
 }
@@ -53,7 +53,6 @@ input,textarea,.code{-webkit-user-select:text;user-select:text}
 .btn:hover{filter:brightness(1.1)}
 .btn:disabled{opacity:.5;cursor:default}
 :focus-visible{outline:3px solid #8ab4ff;outline-offset:2px}
-.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1 1 140px}
 
 .seg{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:3px;gap:3px}
 .seg button{min-height:44px;border:0;border-radius:9px;background:none;color:var(--muted);font-weight:600;font-size:.95rem;font-family:inherit;cursor:pointer}
@@ -77,7 +76,6 @@ input,textarea,.code{-webkit-user-select:text;user-select:text}
   background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;margin:0;color:var(--text);max-height:30dvh;overflow:auto}
 textarea.code{width:100%;min-height:120px;resize:none;text-transform:uppercase} /* >=16px: иначе iOS зумит при фокусе */
 .meter{margin:0;font-size:.9rem;color:var(--muted);min-height:1.4em}
-.meter.ok{color:var(--ok)}.meter.err{color:var(--danger)}
 .note{background:var(--card);border:1px solid var(--line);border-left:4px solid var(--danger);border-radius:10px;padding:10px 12px;font-size:.95rem}
 .note.info{border-left-color:#8ab4ff}
 ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4px 0} ul.why b{color:var(--text)}
@@ -138,8 +136,8 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 <script>
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
-const html = (strs, ...v) => strs.reduce((a, s, i) => a + s + (v[i] ?? ''), '');
 const live = t => { $('#live').textContent = ''; setTimeout(() => $('#live').textContent = t, 30); };
+const stopTracks = st => st.getTracks().forEach(t => t.stop());
 const hasSecure = window.isSecureContext, hasCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
 
 /* ====== кодек: SDP data-channel-only <-> короткий текст из 0-9A-Z ======
@@ -266,7 +264,7 @@ const Codec = (() => {
   }
   function fromB32(s) {
     const out = []; let acc = 0, n = 0;
-    for (const c of s.toUpperCase().replace(/O/g, '0').replace(/[IL]/g, '1').replace(/[^0-9A-Z]/g, '')) {
+    for (const c of s.replace(/O/g, '0').replace(/[IL]/g, '1')) {   // вход уже прошёл norm()
       const v = B32.indexOf(c);
       if (v < 0) throw new Error('char');
       acc = (acc << 5) | v; n += 5;
@@ -301,11 +299,11 @@ function netInit() {
   };
   return p;
 }
-const sendG = m => chG && chG.readyState === 'open' && chG.send(JSON.stringify(m));
-const sendC = s => chC && chC.readyState === 'open' && chC.send(s);
+const sendOn = (ch, d) => ch && ch.readyState === 'open' && ch.send(d);
+const sendG = m => sendOn(chG, JSON.stringify(m)), sendC = s => sendOn(chC, s);
 
 /* Chrome прячет локальные IP за mDNS (*.local), пока страница не получала доступ к камере. Камера нужна и для сканирования */
-const warmCamera = () => hasCam ? navigator.mediaDevices.getUserMedia({ video: true }).then(s => s.getTracks().forEach(t => t.stop()), () => {}) : Promise.resolve();
+const warmCamera = () => hasCam ? navigator.mediaDevices.getUserMedia({ video: true }).then(stopTracks, () => {}) : Promise.resolve();
 
 /* ждём ICE-кандидатов: complete, либо 500 мс тишины после первого, либо 3 с */
 const gathered = p => new Promise(res => {
@@ -323,9 +321,9 @@ async function setLocal(p, desc) {   // p передаём явно: пока ж
   await wait;
   return Codec.toB32(Codec.encode(p.localDescription.sdp));
 }
-async function makeOffer(tok) {
+async function makeOffer(alive) {
   await warmCamera();
-  if (tok !== S.tok) return;   // пока ждали разрешение камеры, пользователь ушёл с экрана
+  if (!alive()) return;   // пока ждали разрешение камеры, пользователь ушёл с экрана
   const p = netInit();
   return setLocal(p, await p.createOffer());
 }
@@ -337,7 +335,6 @@ async function takeOffer(f) {
 const takeAnswer = f => pc.setRemoteDescription({ type: 'answer', sdp: Codec.buildSdp(f, Codec.parseSdp(pc.localDescription.sdp).mid) });
 
 /* ====== мастер подключения ====== */
-const ALPH = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
 const norm = s => String(s).normalize('NFKC').toUpperCase().replace(/[^A-Z0-9]/g, '');   // пробелы, \n, NBSP, нижний регистр, мусор
 const fmt = s => s.replace(/(.{5})(?=.)/g, '$1 ');
 /* код -> поля SDP; бросает Error('type'), если это код не той роли, и другую ошибку, если это не код */
@@ -371,8 +368,8 @@ function drawQR(host, text) {
 }
 
 /* сканирование: камера (jsQR) / фото / вставка кода. Кадр сначала уменьшаем: на шумной камере 480 px читается быстрее и надёжнее, чем нативные 1280 */
-let stream = null, scanTimer = 0, camGen = 0;
-const stopCam = () => { camGen++; clearTimeout(scanTimer); if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } };
+let stream = null, scanTimer = 0;
+const stopCam = () => { S.tok++; clearTimeout(scanTimer); if (stream) { stopTracks(stream); stream = null; } };   // S.tok++ отменяет и ожидающий getUserMedia
 function scanCanvas(ctx, src, sw, sh, side) {
   const k = Math.min(1, side / Math.max(sw, sh)), w = Math.round(sw * k), h = Math.round(sh * k);
   ctx.canvas.width = w; ctx.canvas.height = h;
@@ -383,10 +380,10 @@ function scanCanvas(ctx, src, sw, sh, side) {
 }
 async function startCam(video, onText) {
   if (!hasCam) throw { kind: hasSecure ? 'unsupported' : 'insecure' };
-  const gen = camGen; let st;
+  const tok = S.tok; let st;
   try { st = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 } }, audio: false }); }
   catch (e) { throw { kind: e.name === 'NotAllowedError' || e.name === 'SecurityError' ? 'denied' : e.name === 'NotFoundError' ? 'none' : 'busy' }; }
-  if (gen !== camGen) return st.getTracks().forEach(t => t.stop());   // пока ждали разрешение, экран уже сменился
+  if (tok !== S.tok) return stopTracks(st);   // пока ждали разрешение, экран уже сменился
   stream = st; video.srcObject = stream; await video.play().catch(() => {});
   const ctx = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
   let n = 0;
@@ -424,10 +421,11 @@ function mount() {
   $('.scroller').scrollTop = 0;
 }
 function go(step, role) {
-  stopCam(); clearInterval(S.tick); S.tok++;
+  stopCam(); clearInterval(S.tick);
   if (role) S.role = role;
   S.step = step;
   const steps = roleSteps[S.role] || [], idx = steps.indexOf(step), dots = $('#dots');
+  if (idx < 0) netClose();   // вне шагов мастера (home, fail) соединения быть не должно
   $('#back').hidden = step === 'home';
   dots.replaceChildren();
   if (idx >= 0) steps.forEach((_, i) => { const d = document.createElement('i'); d.className = i < idx ? 'done' : i === idx ? 'on' : ''; dots.append(d); });
@@ -435,24 +433,25 @@ function go(step, role) {
   VIEWS[step]();
   live(($('#title') ? $('#title').textContent : '') + (idx >= 0 ? `. Шаг ${idx + 1} из ${steps.length}` : ''));
 }
-function resetAll() { netClose(); S.offer = S.err = null; go('home'); }
+function resetAll() { S.offer = null; go('home'); }
 $('#back').onclick = resetAll;
 
 /* Ошибка на любом шаге и обрыв до начала игры -> экран «Не удалось соединиться» */
-function netDown() {
-  if (G) return showLost('Связь потеряна');
-  if (['connect', 'h-scan', 'c-show'].includes(S.step)) go('fail');
-}
+const netDown = () => G ? showLost('Связь потеряна') : go('fail');
 const fail = e => { S.err = e; go('fail'); };
+function run(job, ok) {   // результат асинхронной работы применяем, только если пользователь не ушёл с экрана
+  const tok = S.tok, alive = () => tok === S.tok;
+  job(alive).then(v => alive() && ok(v), e => alive() && fail(e));
+}
 
 /* showView: показать код (QR или текстом). Асинхронный: пока код считается, на экране крутилка */
 function loadingView(title) {
-  card.innerHTML = html`<div class="visual"><div class="spin" aria-hidden="true"></div></div>
+  card.innerHTML = `<div class="visual"><div class="spin" aria-hidden="true"></div></div>
     <div class="text" style="text-align:center"><h1 id="title">${title}</h1><p>Это займёт пару секунд.</p></div>`;
   mount();
 }
 function showView(code, { title, lead, tail, next, nextLabel }) {
-  card.innerHTML = html`
+  card.innerHTML = `
   <div class="visual" id="vis"></div>
   <div class="text"><h1 id="title">${title}</h1><p class="big">${lead}</p></div>
   <div class="seg" role="group" aria-label="Как передать"><button data-m="qr" aria-pressed="true">QR-код</button><button data-m="txt" aria-pressed="false">Текстом</button></div>
@@ -461,7 +460,7 @@ function showView(code, { title, lead, tail, next, nextLabel }) {
   const vis = $('#vis');
   const paintQR = () => { vis.innerHTML = '<div class="qr" id="qr"></div>'; drawQR($('#qr'), code); };
   const paintTxt = () => {
-    vis.innerHTML = html`<div class="box"><output class="code" tabindex="0" aria-label="Код для ввода вручную">${fmt(code)}</output>
+    vis.innerHTML = `<div class="box"><output class="code" tabindex="0" aria-label="Код для ввода вручную">${fmt(code)}</output>
       <button class="btn" id="copy">Скопировать</button>
       <p class="meter">${code.length} символов${hasSecure ? '' : ' · выделите текст и скопируйте вручную'}</p></div>`;
     $('#copy').onclick = async e => {
@@ -480,7 +479,7 @@ function showView(code, { title, lead, tail, next, nextLabel }) {
 
 function scanView({ title, lead, want, onCode }) {
   const initial = hasCam ? 'cam' : 'photo';
-  card.innerHTML = html`
+  card.innerHTML = `
   <div class="visual" id="vis"></div>
   <div class="text"><h1 id="title">${title}</h1><p class="big">${lead}</p></div>
   <div class="seg" role="group" aria-label="Как ввести"><button data-m="cam"${hasCam ? '' : ' disabled'}>Камера</button><button data-m="photo">Фото</button><button data-m="txt">Код</button></div>
@@ -494,10 +493,11 @@ function scanView({ title, lead, want, onCode }) {
     let f;
     try { f = parseCode(text, want); }
     catch (e) {
-      if (!quiet && text !== bad) note(e.message === 'type'
+      const show = !quiet || e.message === 'type';   // при наборе молчим про «не код», но чужой полный код — однозначная ошибка
+      if (show && text !== bad) note(e.message === 'type'
         ? (want === 'offer' ? 'Это ответный код. Здесь нужен код того, кто нажал «Создать игру».' : 'Это код хозяина. Здесь нужен ответный код второго игрока.')
         : 'Это не код игры. Нужен QR-код или код из этого же приложения на втором телефоне.');
-      if (!quiet) bad = text;
+      if (show) bad = text;
       return false;
     }
     done = true; stopCam(); live('Код принят'); onCode(f); return true;
@@ -508,10 +508,10 @@ function scanView({ title, lead, want, onCode }) {
     if (m === 'cam') {
       vis.innerHTML = '<div class="frame"><video playsinline muted autoplay></video><div class="vf"></div><div class="ph" id="ph" hidden></div></div>';
       aux.innerHTML = '<p>Держите телефон так, чтобы весь QR-код был в рамке. Если не считывается — увеличьте яркость на втором телефоне.</p>';
-      const gen = camGen;
+      const tok = S.tok;
       try { await startCam($('video'), accept); }
       catch (e) {
-        if (gen !== camGen) return;   // пока камера отказывала, пользователь уже переключил режим
+        if (tok !== S.tok) return;   // пока камера отказывала, пользователь уже переключил режим
         const [t, d] = camMsg[e.kind] || camMsg.busy;
         $('#ph').hidden = false; $('#ph').innerHTML = `<b>${t}</b><span>${d}</span>`;
         $('video').hidden = $('.vf').hidden = true;
@@ -521,7 +521,7 @@ function scanView({ title, lead, want, onCode }) {
         live(t + '. Доступны фото и ввод кода.');
       }
     } else if (m === 'photo') {
-      vis.innerHTML = html`<label class="drop"><input type="file" accept="image/*" capture="environment" id="file"><b>Сфотографировать QR</b><span>Откроется камера телефона. Снимите QR ровно, чтобы он занял почти весь кадр</span></label>`;
+      vis.innerHTML = `<label class="drop"><input type="file" accept="image/*" capture="environment" id="file"><b>Сфотографировать QR</b><span>Откроется камера телефона. Снимите QR ровно, чтобы он занял почти весь кадр</span></label>`;
       if (!hasCam) aux.innerHTML = '<div class="note info">Живая камера в браузере здесь недоступна (адрес по http://), поэтому используем фото. Это так же быстро.</div>';
       $('#file').onchange = async e => {
         const file = e.target.files[0]; if (!file) return;
@@ -530,7 +530,7 @@ function scanView({ title, lead, want, onCode }) {
         if (t) accept(t); else note('QR не найден. Снимите ближе, при хорошем свете, чтобы он был целиком в кадре и без бликов.');
       };
     } else {
-      vis.innerHTML = html`<div class="box">
+      vis.innerHTML = `<div class="box">
         <textarea id="ci" class="code" rows="4" placeholder="Вставьте или введите код" autocapitalize="characters" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" aria-describedby="meter"></textarea>
         <p class="meter" id="meter"></p></div>`;
       const ci = $('#ci'), meter = $('#meter');
@@ -550,7 +550,7 @@ function scanView({ title, lead, want, onCode }) {
 
 function connectView() {
   const t0 = Date.now();
-  card.innerHTML = html`
+  card.innerHTML = `
   <div class="visual"><div class="spin" aria-hidden="true"></div></div>
   <div class="text" style="text-align:center"><h1 id="title">Подключаемся…</h1><p class="big">Оставьте оба телефона включёнными и рядом, не сворачивайте браузер.</p></div>
   <div style="display:grid;justify-items:center"><div class="bar"><i id="bar"></i></div></div>
@@ -563,9 +563,8 @@ function connectView() {
   }, 200);
 }
 function failView() {
-  netClose();   // иначе соединение, поднявшееся позже, запустило бы игру поверх экрана ошибки
   const err = S.err; S.err = null;
-  card.innerHTML = html`
+  card.innerHTML = `
   <div class="visual"><svg width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="#ff6b81" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 7v6M12 17h.01"/></svg></div>
   <div class="text"><h1 id="title">Не удалось соединиться</h1>
     <p class="big" id="lead">Телефоны не нашли друг друга. Чаще всего дело в сети:</p>
@@ -579,14 +578,14 @@ function failView() {
   <div class="actions"><button class="btn primary" id="again">Попробовать снова</button><button class="btn" id="fresh">Выбрать роль заново</button></div>`;
   mount();
   if (err) $('#lead').textContent = 'Что-то пошло не так: ' + (err.message || err);
-  $('#again').onclick = () => go(S.role === 'host' ? 'h-show' : 'c-scan');
+  $('#again').onclick = () => go(roleSteps[S.role][0]);
   $('#fresh').onclick = resetAll;
 }
 
 const VIEWS = {
   home() {
     S.role = null;
-    card.innerHTML = html`
+    card.innerHTML = `
     <div class="text" style="text-align:center;grid-column:1/-1"><h1 id="title" style="font-size:clamp(1.6rem,7vw,2.2rem)">Пинг-понг для двоих</h1>
     <p class="big">Играйте вдвоём по одной Wi‑Fi сети. Интернет и сервер не нужны.</p></div>
     <div class="actions inline" style="grid-column:1/-1;max-width:420px;width:100%;justify-self:center">
@@ -599,16 +598,15 @@ const VIEWS = {
   },
   'h-show'() {
     loadingView('Готовим код…');
-    const tok = S.tok;
-    makeOffer(tok).then(code => tok === S.tok && showView(code, {
+    run(makeOffer, code => showView(code, {
       title: 'Покажите QR второму игроку', lead: 'Второй игрок нажимает «Присоединиться» и сканирует этот код.',
       tail: 'Нет камеры или QR не читается? Переключитесь на «Текстом» и передайте код вручную. Когда второй игрок увидит свой QR — нажмите «Далее».',
       next: () => go('h-scan'), nextLabel: 'Далее: сканировать его ответ'
-    }), e => tok === S.tok && fail(e));
+    }));
   },
   'h-scan'() {
     scanView({ title: 'Отсканируйте ответ', lead: 'Наведите камеру на QR-код на экране второго игрока.', want: 'answer',
-      onCode: f => { go('connect'); takeAnswer(f).catch(fail); } });
+      onCode: f => { go('connect'); run(() => takeAnswer(f), () => {}); } });
   },
   'c-scan'() {
     scanView({ title: 'Отсканируйте QR хозяина', lead: 'Наведите камеру на QR-код на экране первого игрока.', want: 'offer',
@@ -616,11 +614,10 @@ const VIEWS = {
   },
   'c-show'() {
     loadingView('Готовим ответ…');
-    const tok = S.tok;
-    takeOffer(S.offer).then(code => tok === S.tok && showView(code, {
+    run(() => takeOffer(S.offer), code => showView(code, {
       title: 'Покажите ответ хозяину', lead: 'Хозяин сканирует этот QR-код своим телефоном.',
       tail: 'Игра начнётся сама, как только хозяин отсканирует код.'
-    }), e => tok === S.tok && fail(e));
+    }));
   },
   connect: connectView,
   fail: failView
@@ -669,8 +666,9 @@ function advance(b, dt, pads, evs) {
   }
 }
 
-let G = null, raf = 0, last = 0, acc = 0, lastSend = 0, lastReady = 0, sentPad = -1, ovKey = '';
-const cv = $('#cv'), g = cv.getContext('2d'), fit = { s: 1, ox: 0, oy: 0, dpr: 1, left: 0 };
+let G = null, raf = 0, ovKey = '';
+const DASH = [8, 8], NODASH = [];
+const cv = $('#cv'), g = cv.getContext('2d', { alpha: false }), fit = { s: 1, ox: 0, oy: 0, dpr: 1, left: 0 };
 
 function startCountdown() { G.phase = PHASE.COUNT; G.cd = C.COUNT; Object.assign(G.ball, { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }); G.dirty = true; }
 function launch() {   // подача на проигравшего, угол 8..30° от вертикали, скорость строго V0
@@ -688,39 +686,35 @@ function step(dt) {   // один фиксированный шаг физики
   }
 }
 function updatePause() {   // хост: пауза, пока кто-то из игроков свернул вкладку
-  if (!G.ready) return;
-  if (G.away.h || G.away.c) { if (G.phase !== PHASE.PAUSE) { G.phase = PHASE.PAUSE; G.dirty = true; } }
+  if (G.phase === PHASE.WAIT) return;
+  if (G.foeAway || document.hidden) { if (G.phase !== PHASE.PAUSE) { G.phase = PHASE.PAUSE; G.dirty = true; } }
   else if (G.phase === PHASE.PAUSE) startCountdown();
 }
 
 /* сообщения: состояние (хост -> клиент) [seq, bx, by, vx, vy, hostPad, phase, scoreHost, scoreClient, cd]; ввод (клиент -> хост) [pad] в системе координат хоста */
 function onState(m) {
-  if (G.host) { G.pads.top = clampPad(m[0]); return; }
+  if (G.host) { G.pads.top = clampPad(m[0]); if (G.phase === PHASE.WAIT) startCountdown(); return; }   // первый пакет клиента = клиент в игре
   if (m[0] <= G.seq) return;   // канал без порядка: устаревший пакет
   [G.seq, G.ball.x, G.ball.y, G.ball.vx, G.ball.vy, G.pads.bot, G.phase, G.score[0], G.score[1], G.cd] = m;
 }
 function onControl(s) {
   if (s === 'bye') showLost('Соперник вышел из игры');
-  else if (s === 'ready') { if (G.host && !G.ready) { G.ready = true; startCountdown(); } }
-  else { G.away[G.host ? 'c' : 'h'] = s === 'away'; if (G.host) updatePause(); }   // 'away' | 'back'
+  else { G.foeAway = s === 'away'; if (G.host) updatePause(); }   // 'away' | 'back'
 }
 function sendState() {
   const b = G.ball; G.dirty = false;
   sendG([++G.seq, r1(b.x), r1(b.y), r1(b.vx), r1(b.vy), r1(G.pads.bot), G.phase, G.score[0], G.score[1], r1(G.cd)]);
 }
 function netTick(now) {
-  const quiet = G.away[G.host ? 'c' : 'h'];   // соперник свернул вкладку — молчать можно долго
-  if (!quiet && now - G.rx > 4000) return showLost('Связь потеряна');
-  if (G.host) { if (G.dirty || now - lastSend >= 33) { sendState(); lastSend = now; } }
-  else {
-    if (G.phase === PHASE.WAIT && now - lastReady >= 500) { sendC('ready'); lastReady = now; }   // хост мог ещё не создать игру и пропустить первое
-    if (G.pads.top !== sentPad || now - lastSend >= 200) { sendG([r1(G.pads.top)]); sentPad = G.pads.top; lastSend = now; }
-  }
+  if (!G.foeAway && now - G.rx > 4000) return showLost('Связь потеряна');   // соперник свернул вкладку — молчать можно долго
+  if (G.host) { if (G.dirty || now - G.lastSend >= 33) { sendState(); G.lastSend = now; } }
+  else if (G.pads.top !== G.sentPad || now - G.lastSend >= 200) { sendG([r1(G.pads.top)]); G.sentPad = G.pads.top; G.lastSend = now; }
 }
 
 function resize() {
   const r = cv.getBoundingClientRect(), dpr = devicePixelRatio || 1, s = Math.min(r.width / C.W, r.height / C.H);
-  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
+  const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }   // присваивание сбрасывает буфер — только при смене размера
   Object.assign(fit, { s, dpr, left: r.left, ox: (r.width - C.W * s) / 2, oy: (r.height - C.H * s) / 2 });
 }
 new ResizeObserver(() => { if (G) resize(); }).observe(cv);
@@ -746,21 +740,21 @@ $('#ovbtn').onclick = exitGame;
 
 function startGame(host) {
   $('#app').hidden = true; $('#game').hidden = false; resize();
-  G = { host, me: host ? 'bot' : 'top', phase: PHASE.WAIT, cd: 0, score: [0, 0], serveDir: 1, seq: 0, dirty: false, lost: false, ready: false,
-    ball: { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }, pads: { bot: C.W / 2, top: C.W / 2 }, shown: { bot: C.W / 2, top: C.W / 2 },
-    away: { h: false, c: false }, rx: performance.now() };
-  ovKey = ''; last = performance.now(); acc = 0; sentPad = -1; lastReady = 0;
+  G = { host, me: host ? 'bot' : 'top', phase: PHASE.WAIT, cd: 0, score: [0, 0], serveDir: 1, seq: 0, dirty: false, lost: false, foeAway: false,
+    ball: { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }, pads: { bot: C.W / 2, top: C.W / 2 }, oppX: C.W / 2,   // oppX — сглаженная ракетка соперника
+    rx: performance.now(), last: performance.now(), acc: 0, lastSend: 0, sentPad: -1 };
+  ovKey = '';
   $('#hint').classList.remove('off'); setTimeout(() => $('#hint').classList.add('off'), 4000);
   cancelAnimationFrame(raf); raf = requestAnimationFrame(frame);
 }
 
 function frame(now) {
   raf = requestAnimationFrame(frame);
-  const dt = Math.min((now - last) / 1000, C.MAXF); last = now;
-  if (G.host) { acc += dt; while (acc >= C.STEP) { step(C.STEP); acc -= C.STEP; } }
+  const dt = Math.min((now - G.last) / 1000, C.MAXF); G.last = now;
+  if (G.host) { G.acc += dt; while (G.acc >= C.STEP) { step(C.STEP); G.acc -= C.STEP; } }
   else if (G.phase === PHASE.PLAY) advance(G.ball, dt, G.pads);   // между пакетами мяч летит по инерции
   else if (G.phase === PHASE.COUNT) G.cd = Math.max(0, G.cd - dt);
-  for (const k of ['bot', 'top']) G.shown[k] = k === G.me ? G.pads[k] : G.shown[k] + (G.pads[k] - G.shown[k]) * (1 - Math.exp(-dt * 25));
+  G.oppX += (G.pads[G.host ? 'top' : 'bot'] - G.oppX) * (1 - Math.exp(-dt * 25));
   netTick(now);
   if (G.lost) return;
   if (G.phase === PHASE.COUNT) setOv(Math.ceil(G.cd), 'Приготовьтесь');
@@ -776,13 +770,14 @@ function draw() {
   g.setTransform(dpr * s, 0, 0, dpr * s, dpr * ox, dpr * oy);
   g.fillStyle = '#0b1118'; g.fillRect(0, 0, W, H);
   g.strokeStyle = 'rgba(255,255,255,.16)'; g.lineWidth = 1; g.strokeRect(.5, .5, W - 1, H - 1);
-  g.setLineDash([8, 8]); g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke(); g.setLineDash([]);
+  g.setLineDash(DASH); g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke(); g.setLineDash(NODASH);
   g.fillStyle = 'rgba(255,255,255,.22)'; g.font = '700 56px system-ui'; g.textAlign = 'center';
   g.fillText(G.score[G.host ? 1 : 0], W / 2, H / 2 - 26);   // счёт соперника сверху, свой снизу
   g.fillText(G.score[G.host ? 0 : 1], W / 2, H / 2 + 62);
   if (!G.host) { g.translate(W, H); g.rotate(Math.PI); }
-  g.fillStyle = G.me === 'top' ? '#2ee6c5' : '#ff4d8d'; g.fillRect(G.shown.top - PW / 2, GAP, PW, PH);
-  g.fillStyle = G.me === 'bot' ? '#2ee6c5' : '#ff4d8d'; g.fillRect(G.shown.bot - PW / 2, H - GAP - PH, PW, PH);
+  const mine = G.pads[G.me];   // своя ракетка без сглаживания, чужая — G.oppX
+  g.fillStyle = G.host ? '#ff4d8d' : '#2ee6c5'; g.fillRect((G.host ? G.oppX : mine) - PW / 2, GAP, PW, PH);
+  g.fillStyle = G.host ? '#2ee6c5' : '#ff4d8d'; g.fillRect((G.host ? mine : G.oppX) - PW / 2, H - GAP - PH, PW, PH);
   g.fillStyle = '#fff'; g.beginPath(); g.arc(G.ball.x, G.ball.y, R, 0, Math.PI * 2); g.fill();
 }
 
@@ -790,7 +785,7 @@ document.addEventListener('visibilitychange', () => {
   if (!G || G.lost) return;
   G.rx = performance.now();   // после возврата из фона тишина в канале — не обрыв
   sendC(document.hidden ? 'away' : 'back');
-  if (G.host) { G.away.h = document.hidden; updatePause(); sendState(); }   // вкладка скоро заснёт — сообщаем паузу сразу
+  if (G.host) { updatePause(); sendState(); }   // вкладка скоро заснёт — сообщаем паузу сразу
 });
 addEventListener('pagehide', () => sendC('bye'));
 
