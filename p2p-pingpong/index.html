@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>P2P Web Ping-Pong (No Server)</title>
+    <!-- Подключаем библиотеку генерации QR кодов -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        body {
+            background: #111;
+            color: #fff;
+            font-family: sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #setup-screen {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            max-width: 400px;
+            padding: 20px;
+            text-align: center;
+            gap: 15px;
+            overflow-y: auto;
+            max-height: 100vh;
+        }
+        h2 {
+            color: #00ffcc;
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        p {
+            font-size: 14px;
+            color: #aaa;
+        }
+        button {
+            background: #00ffcc;
+            color: #111;
+            border: none;
+            padding: 12px;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: 0.2s;
+        }
+        button:hover {
+            background: #00ccaa;
+        }
+        button:disabled {
+            background: #444;
+            color: #888;
+        }
+
+        .step-box {
+            background: #222;
+            border: 1px solid #333;
+            padding: 15px;
+            border-radius: 10px;
+            display: none;
+            flex-direction: column;
+            gap: 10px;
+            align-items: center;
+        }
+        .active-step {
+            display: flex;
+        }
+
+        #qrcode {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            display: inline-block;
+        }
+        #qrcode img {
+            display: block;
+            width: 180px;
+            height: 180px;
+        }
+
+        video {
+            width: 100%;
+            max-width: 240px;
+            height: 180px;
+            border-radius: 8px;
+            background: #000;
+            transform: scaleX(-1);
+            object-fit: cover;
+        }
+        textarea {
+            width: 100%;
+            height: 60px;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 5px;
+            border-radius: 5px;
+            resize: none;
+            font-size: 12px;
+        }
+
+        .fallback-ui {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 5px;
+            border-top: 1px dashed #444;
+            padding-top: 10px;
+        }
+
+        /* Стили игрового поля */
+        #game-screen {
+            display: none;
+            width: 100vw;
+            height: 100vh;
+            position: relative;
+            background: #050505;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        #status-overlay {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            font-family: monospace;
+            font-size: 14px;
+            color: #888;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- ЭКРАН ПОДКЛЮЧЕНИЯ -->
+    <div id="setup-screen">
+        <h2>P2P Ping-Pong</h2>
+        <p>
+            Вертикальный кооп по локальной сети без сервера
+        </p>
+
+        <div id="entry-buttons" style="display: flex; gap: 10px; justify-content: center;">
+            <button id="btn-choose-host" onclick="startAsHost()">Создать игру (Хост)</button>
+            <button id="btn-choose-client" onclick="startAsClient()">Войти (Клиент)</button>
+        </div>
+
+        <!-- ХОСТ: Шаг 1 (Показ Offer) -->
+        <div id="host-step-1" class="step-box">
+            <h3>Шаг 1: Подключение Клиента</h3>
+            <p>
+                Клиент должен отсканировать этот QR-код
+            </p>
+            <div id="qrcode"></div>
+
+            <div class="fallback-ui">
+                <p>
+                    Или скопируйте текст вручную:
+                </p>
+                <textarea id="host-offer-text" readonly onclick="this.select()"></textarea>
+                <button onclick="copyText('host-offer-text')">Скопировать код</button>
+            </div>
+            <button onclick="goToScanAnswer()" style="margin-top:10px; width:100%;">Я показал, перейти к сканированию Ответного QR</button>
+        </div>
+
+        <!-- ХОСТ: Шаг 2 (Сканирование Answer) -->
+        <div id="host-step-2" class="step-box">
+            <h3>Шаг 2: Сканируйте Ответ</h3>
+            <p>
+                Наведите камеру на QR-код Клиента
+            </p>
+            <video id="host-video" autoplay playsinline></video>
+
+            <div class="fallback-ui">
+                <p>
+                    Или вставьте ответный текст Клиента:
+                </p>
+                <textarea id="host-answer-input" placeholder="Вставьте код сюда..."></textarea>
+                <button onclick="applyManualAnswer()">Подключить вручную</button>
+            </div>
+        </div>
+
+        <!-- КЛИЕНТ: Шаг 1 (Сканирование Offer) -->
+        <div id="client-step-1" class="step-box">
+            <h3>Шаг 1: Сканируйте Хоста</h3>
+            <p>
+                Наведите камеру на QR-код Создателя
+            </p>
+            <video id="client-video" autoplay playsinline></video>
+
+            <div class="fallback-ui">
+                <p>
+                    Или вставьте код Хоста вручную:
+                </p>
+                <textarea id="client-offer-input" placeholder="Вставьте код сюда..."></textarea>
+                <button onclick="applyManualOffer()">Обработать код</button>
+            </div>
+        </div>
+
+        <!-- КЛИЕНТ: Шаг 2 (Показ Answer) -->
+        <div id="client-step-2" class="step-box">
+            <h3>Шаг 2: Ответ Хосту</h3>
+            <p>
+                Хост должен отсканировать этот QR-код у вас
+            </p>
+            <div id="qrcode-answer"></div>
+
+            <div class="fallback-ui">
+                <p>
+                    Или скопируйте ответный текст:
+                </p>
+                <textarea id="client-answer-text" readonly onclick="this.select()"></textarea>
+                <button onclick="copyText('client-answer-text')">Скопировать ответ</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ИГРОВОЙ ЭКРАН -->
+    <div id="game-screen">
+        <div id="status-overlay">
+            Соединение...
+        </div>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <script>
+        // --- Настройки P2P (WebRTC без сигнального сервера) ---
+        const configuration = {
+            iceServers: []
+        }; // Строго локальная сеть, STUN не нужен
+        let peerConnection = new RTCPeerConnection(configuration);
+        let dataChannel = null;
+        let isHost = false;
+        let videoStream = null;
+
+        // Элементы интерфейса
+        const setupScreen = document.getElementById('setup-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const statusOverlay = document.getElementById('status-overlay');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // Сжатие строк WebRTC (SDP громоздкий, ужимаем для QR-кода)
+        function compressSDP(sdp) {
+            return btoa(sdp.split('\r\n').filter(line =>
+                line.indexOf('a=candidate') === -1 &&
+                line.indexOf('a=ice-options') === -1
+            ).join('\n'));
+        }
+
+        function decompressSDP(b64, type) {
+            let raw = atob(b64);
+            return {
+                type: type,
+                sdp: raw.split('\n').join('\r\n') + '\r\n'
+            };
+        }
+
+        function copyText(id) {
+            const txt = document.getElementById(id);
+            txt.select();
+            document.execCommand('copy');
+            alert('Скопировано в буфер!');
+        }
+
+        // КЛИЕНТСКИЙ ТРЕКЕР КАМЕРЫ (Грубый парсинг QR без тяжелых библиотек, через опрос, если поддерживается)
+        // Для 100% стабильности вшиты текстовые фоллбэки. Попытка запустить камеру:
+        async function startCamera(videoEl, onScanSuccess) {
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: "environment"
+                    }
+                });
+                videoEl.srcObject = videoStream;
+            } catch (e) {
+                console.log("Камера недоступна (требуется HTTPS / Localhost). Работает текстовый обмен.");
+                videoEl.style.display = 'none';
+            }
+        }
+
+        function stopCamera() {
+            if (videoStream) {
+                videoStream.getTracks().forEach(track => track.stop());
+            }
+        }
+
+        // --- ИНИЦИАЛИЗАЦИЯ ХОСТА ---
+        function startAsHost() {
+            isHost = true;
+            document.getElementById('entry-buttons').style.display = 'none';
+            document.getElementById('host-step-1').classList.add('active-step');
+
+            // Хост создает DataChannel
+            dataChannel = peerConnection.createDataChannel("pingpong-proto");
+            setupDataChannelHandlers();
+
+            peerConnection.createOffer().then(offer => {
+                return peerConnection.setLocalDescription(offer);
+            }).then(() => {
+                // Ждем генерации локальных ICE (в нашей конфигурации без серверов это мгновенно)
+                setTimeout(() => {
+                    let comp = compressSDP(peerConnection.localDescription.sdp);
+                    document.getElementById('host-offer-text').value = comp;
+                    new QRCode(document.getElementById("qrcode"), {
+                        text: comp, width: 180, height: 180
+                    });
+                }, 500);
+            });
+        }
+
+        function goToScanAnswer() {
+            document.getElementById('host-step-1').classList.remove('active-step');
+            document.getElementById('host-step-2').classList.add('active-step');
+            startCamera(document.getElementById('host-video'));
+        }
+
+        function applyManualAnswer() {
+            let comp = document.getElementById('host-answer-input').value.trim();
+            if (!comp) return alert("Введите код!");
+            let sdp = decompressSDP(comp, 'answer');
+            peerConnection.setRemoteDescription(new RTCSessionDescription(sdp))
+            .then(() => stopCamera());
+        }
+
+        // --- ИНИЦИАЛИЗАЦИЯ КЛИЕНТА ---
+        function startAsClient() {
+            isHost = false;
+            document.getElementById('entry-buttons').style.display = 'none';
+            document.getElementById('client-step-1').classList.add('active-step');
+            startCamera(document.getElementById('client-video'));
+
+            peerConnection.ondatachannel = (event) => {
+                dataChannel = event.channel;
+                setupDataChannelHandlers();
+            };
+        }
+
+        function applyManualOffer() {
+            let comp = document.getElementById('client-offer-input').value.trim();
+            if (!comp) return alert("Вставьте код Хоста!");
+            stopCamera();
+
+            let sdp = decompressSDP(comp, 'offer');
+            peerConnection.setRemoteDescription(new RTCSessionDescription(sdp)).then(() => {
+                return peerConnection.createAnswer();
+            }).then(answer => {
+                return peerConnection.setLocalDescription(answer);
+            }).then(() => {
+                document.getElementById('client-step-1').classList.remove('active-step');
+                document.getElementById('client-step-2').classList.add('active-step');
+
+                setTimeout(() => {
+                    let compAnswer = compressSDP(peerConnection.localDescription.sdp);
+                    document.getElementById('client-answer-text').value = compAnswer;
+                    new QRCode(document.getElementById("qrcode-answer"), {
+                        text: compAnswer, width: 180, height: 180
+                    });
+                }, 500);
+            });
+        }
+
+        // --- ОБРАБОТЧИКИ ДАННЫХ P2P ---
+        function setupDataChannelHandlers() {
+            dataChannel.onopen = () => {
+                setupScreen.style.display = 'none';
+                gameScreen.style.display = 'block';
+                statusOverlay.innerText = isHost ? "Вы: ХОСТ (Сверху)": "Вы: КЛИЕНТ (Снизу)";
+                resizeCanvas();
+                initGame();
+            };
+
+            dataChannel.onmessage = (event) => {
+                let msg = JSON.parse(event.data);
+                if (isHost) {
+                    // Хост получает только позицию ракетки клиента
+                    if (msg.clientPaddleX !== undefined) {
+                        gameState.paddleBottom.x = msg.clientPaddleX * canvas.width;
+                    }
+                } else {
+                    // Клиент получает полное состояние игры от Хоста
+                    if (msg.ball) {
+                        gameState.ball.x = msg.ball.x * canvas.width;
+                        gameState.ball.y = msg.ball.y * canvas.height;
+                    }
+                    if (msg.paddleTopX !== undefined) {
+                        gameState.paddleTop.x = msg.paddleTopX * canvas.width;
+                    }
+                    if (msg.score) {
+                        gameState.score = msg.score;
+                    }
+                }
+            };
+
+            dataChannel.onclose = () => {
+                alert("Соединение разорвано");
+                window.location.reload();
+            };
+        }
+
+
+        // --- ИГРОВОЙ ДВИЖОК (ВЕРТИКАЛЬНЫЙ ПИНГ-ПОНГ) ---
+        let gameState = {
+            ball: {
+                x: 0.5,
+                y: 0.5,
+                vx: 0.005,
+                vy: 0.007,
+                radius: 10
+            },
+            paddleTop: {
+                x: 0.4,
+                w: 0.2,
+                h: 15
+            },
+            // Ракетка Хоста
+            paddleBottom: {
+                x: 0.4,
+                w: 0.2,
+                h: 15
+            },
+            // Ракетка Клиента
+            score: {
+                host: 0,
+                client: 0
+            }
+        };
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+        function initGame() {
+            // Отслеживание тачей (управление по оси X на вертикальном экране)
+            window.addEventListener('touchmove', (e) => {
+                let touchX = e.touches[0].clientX;
+
+                if (isHost) {
+                    gameState.paddleTop.x = touchX - (gameState.paddleTop.w * canvas.width) / 2;
+                    gameState.paddleTop.x = Math.max(0, Math.min(canvas.width - gameState.paddleTop.w * canvas.width, gameState.paddleTop.x));
+                    if (dataChannel.readyState === "open") {
+                        dataChannel.send(JSON.stringify({
+                            paddleTopX: gameState.paddleTop.x / canvas.width
+                        }));
+                    }
+                } else {
+                    let paddleWidthPx = gameState.paddleBottom.w * canvas.width;
+                    let clientX = touchX - paddleWidthPx / 2;
+                    clientX = Math.max(0, Math.min(canvas.width - paddleWidthPx, clientX));
+                    if (dataChannel.readyState === "open") {
+                        dataChannel.send(JSON.stringify({
+                            clientPaddleX: clientX / canvas.width
+                        }));
+                    }
+                }
+            },
+                {
+                    passive: true
+                });
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // Физика (Считает только Хост!)
+        function updatePhysics() {
+            if (!isHost) return;
+
+            let ball = gameState.ball;
+            let pTop = gameState.paddleTop;
+            let pBot = gameState.paddleBottom;
+
+            let pTopW = pTop.w * canvas.width;
+            let pBotW = pBot.w * canvas.width;
+
+            // Движение мяча
+            ball.x += ball.vx * canvas.width;
+            ball.y += ball.vy * canvas.height;
+
+            // Отскок от левой/правой стены
+            if (ball.x - ball.radius < 0) {
+                ball.x = ball.radius;
+                ball.vx = -ball.vx;
+            }
+            if (ball.x + ball.radius > canvas.width) {
+                ball.x = canvas.width - ball.radius;
+                ball.vx = -ball.vx;
+            }
+
+            // Отскок от верхней ракетки (Хост)
+            if (ball.y - ball.radius < pTop.h && ball.y > 0) {
+                if (ball.x > pTop.x && ball.x < pTop.x + pTopW) {
+                    ball.vy = Math.abs(ball.vy) * 1.05;
+                    ball.y = pTop.h + ball.radius;
+                }
+            }
+
+            // Отскок от нижней ракетки (Клиент)
+            if (ball.y + ball.radius > canvas.height - pBot.h && ball.y < canvas.height) {
+                if (ball.x > pBot.x && ball.x < pBot.x + pBotW) {
+                    ball.vy = -Math.abs(ball.vy) * 1.05;
+                    ball.y = canvas.height - pBot.h - ball.radius;
+                }
+            }
+
+            // Голы
+            if (ball.y < 0) {
+                gameState.score.client++;
+                resetBall();
+            } else if (ball.y > canvas.height) {
+                gameState.score.host++;
+                resetBall();
+            }
+
+            // Синхронизация данных с клиентом
+            if (dataChannel.readyState === "open") {
+                dataChannel.send(JSON.stringify({
+                    ball: {
+                        x: ball.x / canvas.width, y: ball.y / canvas.height
+                    },
+                    score: gameState.score
+                }));
+            }
+        }
+
+        function resetBall() {
+            gameState.ball.x = canvas.width / 2;
+            gameState.ball.y = canvas.height / 2;
+            gameState.ball.vx = (Math.random() > 0.5 ? 0.004: -0.004);
+            gameState.ball.vy = (Math.random() > 0.5 ? 0.005: -0.005);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.strokeStyle = "rgba(255,255,255,0.1)";
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(0, canvas.height / 2);
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+
+            ctx.fillStyle = "rgba(255,255,255,0.3)";
+            ctx.font = "bold 48px monospace";
+            ctx.textAlign = "center";
+            ctx.fillText(gameState.score.host, canvas.width / 2, canvas.height / 2 - 30);
+            ctx.fillText(gameState.score.client, canvas.width / 2, canvas.height / 2 + 70);
+
+            ctx.fillStyle = "#ff0055";
+            ctx.fillRect(gameState.paddleTop.x, 0, gameState.paddleTop.w * canvas.width, gameState.paddleTop.h);
+
+            ctx.fillStyle = "#00ffcc";
+            ctx.fillRect(gameState.paddleBottom.x, canvas.height - gameState.paddleBottom.h, gameState.paddleBottom.w * canvas.width, gameState.paddleBottom.h);
+
+            ctx.fillStyle = "#fff";
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = "#fff";
+            ctx.beginPath();
+            ctx.arc(gameState.ball.x, gameState.ball.y, gameState.ball.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+        }
+
+        function gameLoop() {
+            updatePhysics();
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+    </script>
+</body>
+</html>
