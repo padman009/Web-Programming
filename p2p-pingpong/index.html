@@ -100,6 +100,13 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 @media (max-width:359px){ :root{--pad:12px} .btn{padding:10px 12px} }
 @media (max-height:420px) and (orientation:landscape){ .top{min-height:36px} .text h1{font-size:1.15rem} .text p{font-size:.92rem} }
 
+/* журнал соединения (кнопка «Лог») */
+#logbox{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;gap:10px;background:var(--bg);
+  padding:max(12px,env(safe-area-inset-top)) max(var(--pad),env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(var(--pad),env(safe-area-inset-left))}
+#logbox pre{flex:1;min-height:0;margin:0;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;
+  font:.75rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;-webkit-user-select:text;user-select:text}
+#logbox .actions{grid-auto-flow:column;grid-auto-columns:1fr}
+
 /* ---------- игра ---------- */
 #game{position:fixed;inset:0;height:100vh;height:100dvh;background:#05070a;touch-action:none;overscroll-behavior:none;overflow:hidden;
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
@@ -118,6 +125,7 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
   <div class="top">
     <button class="link" id="back" hidden>‹ Начать заново</button>
     <span class="dots" id="dots" role="img" aria-label=""></span>
+    <button class="link" id="logbtn">Лог</button>
   </div>
   <div class="scroller"><section class="card" id="card" aria-labelledby="title"></section></div>
   <div id="foot"></div>
@@ -133,12 +141,31 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
   </div>
 </div>
 
+<div id="logbox" hidden role="dialog" aria-label="Журнал соединения">
+  <pre id="logtxt" tabindex="0"></pre>
+  <div class="actions"><button class="btn primary" id="logcopy">Скопировать</button><button class="btn" id="logclose">Закрыть</button></div>
+</div>
+
 <script>
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const live = t => { $('#live').textContent = ''; setTimeout(() => $('#live').textContent = t, 30); };
+/* Журнал для диагностики: что собрал браузер, что пришло от второго устройства, как шли ICE-проверки */
+const LOG = [], logT0 = Date.now();
+function dlog(msg) {
+  LOG.push(`+${((Date.now() - logT0) / 1000).toFixed(1)}s ${msg}`);
+  if (!$('#logbox').hidden) $('#logtxt').textContent = LOG.join('\n');
+}
+const fmtCands = cs => cs.map(c => c.addr + ':' + c.port).join(', ') || 'нет';
+$('#logbtn').onclick = () => { $('#logbox').hidden = false; $('#logtxt').textContent = LOG.join('\n'); $('#logtxt').scrollTop = 1e9; };
+$('#logclose').onclick = () => { $('#logbox').hidden = true; };
+$('#logcopy').onclick = async e => {
+  const ok = await copyText(LOG.join('\n')); e.target.textContent = ok ? 'Скопировано ✓' : 'Выделите текст и скопируйте';
+  setTimeout(() => e.target.textContent = 'Скопировать', 1800);
+};
 const stopTracks = st => st.getTracks().forEach(t => t.stop());
 const hasSecure = window.isSecureContext, hasCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+dlog(`старт: ${location.protocol}//${location.host}, secure=${hasSecure}, камера=${hasCam}, ${navigator.userAgent}`);
 
 /* ====== кодек: SDP data-channel-only <-> короткий текст из 0-9A-Z ======
  * В код попадают только fingerprint DTLS, ICE-кандидаты (IPv4 / mDNS) и CRC8. ICE ufrag/pwd выводятся из fingerprint
@@ -207,11 +234,11 @@ const Codec = (() => {
     return { ufrag: g(/^a=ice-ufrag:(\S+)/), pwd: g(/^a=ice-pwd:(\S+)/), fp, cands, mid: g(/^a=mid:(\S+)/) || '0', type: /^a=setup:actpass/m.test(sdp) ? 'offer' : 'answer' };
   }
 
-  /* -> Uint8Array. Кандидаты: сначала IPv4 (кроме 127.*, 0.*), потом mDNS; не больше 4 */
+  /* -> Uint8Array. Кандидаты: сначала IPv4 (кроме 127.*, 0.*), потом mDNS; не больше 8 */
   function encode(sdp) {
     const p = parseSdp(sdp), d = deriveCreds(p.fp), derived = p.ufrag === d.ufrag && p.pwd === d.pwd;
     const sel = p.cands.flatMap(c => isV4(c.addr) ? (/^(127|0|169\.254)\./.test(c.addr) ? [] : [{ t: T_V4, ...c }]) : isMdns(c.addr) ? [{ t: T_MDNS, ...c }] : [])
-      .sort((a, b) => a.t - b.t).slice(0, 4);
+      .sort((a, b) => a.t - b.t).slice(0, 8);
     const w = new BitW();
     w.put(VERSION, 2); w.put(derived ? 1 : 0, 1); w.put(p.type === 'answer' ? 1 : 0, 1); w.put(sel.length, 4);
     p.fp.forEach(b => w.put(b, 8));
@@ -290,28 +317,49 @@ function netInit() {
   // negotiated: каналы создаются по id на обеих сторонах, нет гонки с ondatachannel
   chG = pc.createDataChannel('g', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
   chC = pc.createDataChannel('c', { negotiated: true, id: 1 });
-  chC.onopen = () => { clearInterval(S.tick); startGame(S.role === 'host'); };
+  chC.onopen = () => { dlog('канал открыт'); logPair(p); clearInterval(S.tick); startGame(S.role === 'host'); };
+  chC.onclose = () => dlog('канал закрыт');
   chG.onmessage = e => { if (G) { G.rx = performance.now(); onState(JSON.parse(e.data)); } };
   chC.onmessage = e => { if (G) { G.rx = performance.now(); onControl(e.data); } };
+  p.oniceconnectionstatechange = () => dlog('ice: ' + p.iceConnectionState);
+  p.onicegatheringstatechange = () => dlog('сбор кандидатов: ' + p.iceGatheringState);
+  p.onicecandidateerror = e => dlog(`ошибка ICE: ${e.errorCode} ${e.errorText}`);
+  watchStats(p);
   pc.onconnectionstatechange = () => {   // 'disconnected' в игре бывает кратковременным — там обрыв ловит таймаут тишины
-    const st = p.connectionState;
+    const st = p.connectionState; dlog('соединение: ' + st);
     if (st === 'failed' || st === 'closed' || (st === 'disconnected' && !G)) netDown();
   };
   return p;
+}
+function watchStats(p) {   // пока соединяемся, раз в 2 с коротко пишем, что делают ICE-проверки
+  let prev = '';
+  const iv = setInterval(async () => {
+    if (p !== pc || ['connected', 'closed'].includes(p.connectionState)) return clearInterval(iv);
+    const n = {}; (await p.getStats()).forEach(r => { if (r.type === 'candidate-pair') n[r.state] = (n[r.state] || 0) + 1; });
+    const line = 'пары кандидатов: ' + (Object.entries(n).map(([k, v]) => k + '×' + v).join(', ') || 'нет');
+    if (line !== prev) { dlog(line); prev = line; }
+  }, 2000);
+}
+async function logPair(p) {   // какая пара адресов в итоге победила
+  const st = await p.getStats(), by = {}; st.forEach(r => { by[r.id] = r; });
+  const f = c => c ? `${c.candidateType} ${c.address || c.ip}:${c.port}` : '?';
+  st.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') dlog(`выбрана пара: ${f(by[r.localCandidateId])} ↔ ${f(by[r.remoteCandidateId])}`); });
 }
 const sendOn = (ch, d) => ch && ch.readyState === 'open' && ch.send(d);
 const sendG = m => sendOn(chG, JSON.stringify(m)), sendC = s => sendOn(chC, s);
 
 /* Chrome прячет локальные IP за mDNS (*.local), пока страница не получала доступ к камере. Камера нужна и для сканирования */
-const warmCamera = () => hasCam ? navigator.mediaDevices.getUserMedia({ video: true }).then(stopTracks, () => {}) : Promise.resolve();
+const warmCamera = () => hasCam
+  ? navigator.mediaDevices.getUserMedia({ video: true }).then(st => { stopTracks(st); dlog('камера разрешена: в кандидатах будут реальные IP'); }, e => dlog('камера недоступна (' + e.name + '): в кандидатах будут mDNS-имена *.local'))
+  : Promise.resolve(dlog('камеры нет (нужен https или localhost): в кандидатах будут mDNS-имена *.local'));
 
 /* ждём ICE-кандидатов: complete, либо 500 мс тишины после первого, либо 3 с */
 const gathered = p => new Promise(res => {
   let n = 0, last = Date.now(); const t0 = last;
-  p.onicecandidate = e => { if (e.candidate) { n++; last = Date.now(); } };
+  p.onicecandidate = e => { if (e.candidate) { n++; last = Date.now(); dlog('свой кандидат: ' + e.candidate.candidate.replace(/^candidate:\S+ \d+ (\w+) \d+ (\S+) (\d+) typ (\w+).*$/, '$4 $1 $2:$3')); } };
   const iv = setInterval(() => {
     const now = Date.now();
-    if (p.iceGatheringState === 'complete' || now - t0 > ICE_MAX || (n && now - last > ICE_IDLE)) { clearInterval(iv); p.onicecandidate = null; res(); }
+    if (p.iceGatheringState === 'complete' || now - t0 > ICE_MAX || (n && now - last > ICE_IDLE)) { clearInterval(iv); p.onicecandidate = null; dlog(`сбор кандидатов закончен: ${n} шт.${n ? '' : ' — ни одного! Расширение или политика браузера блокирует WebRTC?'}`); res(); }
   }, 50);
 });
 async function setLocal(p, desc) {   // p передаём явно: пока ждём, пользователь мог начать заново, и глобальный pc уже другой
@@ -319,7 +367,9 @@ async function setLocal(p, desc) {   // p передаём явно: пока ж
   try { await p.setLocalDescription({ type: desc.type, sdp: Codec.munge(desc.sdp) }); }
   catch (e) { await p.setLocalDescription(desc); }   // браузер не дал подменить ICE-креды — они уйдут в код как есть
   await wait;
-  return Codec.toB32(Codec.encode(p.localDescription.sdp));
+  const bytes = Codec.encode(p.localDescription.sdp), code = Codec.toB32(bytes);
+  dlog(`наш код: ${code.length} символов, кандидаты в нём: ${fmtCands(Codec.decodeFields(bytes).cands)}`);
+  return code;
 }
 async function makeOffer(alive) {
   await warmCamera();
@@ -438,7 +488,7 @@ $('#back').onclick = resetAll;
 
 /* Ошибка на любом шаге и обрыв до начала игры -> экран «Не удалось соединиться» */
 const netDown = () => G ? showLost('Связь потеряна') : go('fail');
-const fail = e => { S.err = e; go('fail'); };
+const fail = e => { dlog('ошибка: ' + (e.message || e)); S.err = e; go('fail'); };
 function run(job, ok) {   // результат асинхронной работы применяем, только если пользователь не ушёл с экрана
   const tok = S.tok, alive = () => tok === S.tok;
   job(alive).then(v => alive() && ok(v), e => alive() && fail(e));
@@ -494,13 +544,14 @@ function scanView({ title, lead, want, onCode }) {
     try { f = parseCode(text, want); }
     catch (e) {
       const show = !quiet || e.message === 'type';   // при наборе молчим про «не код», но чужой полный код — однозначная ошибка
+      if (show && text !== bad) dlog('код отвергнут: ' + e.message);
       if (show && text !== bad) note(e.message === 'type'
         ? (want === 'offer' ? 'Это ответный код. Здесь нужен код того, кто нажал «Создать игру».' : 'Это код хозяина. Здесь нужен ответный код второго игрока.')
         : 'Это не код игры. Нужен QR-код или код из этого же приложения на втором телефоне.');
       if (show) bad = text;
       return false;
     }
-    done = true; stopCam(); live('Код принят'); onCode(f); return true;
+    done = true; stopCam(); live('Код принят'); dlog(`принят код (${f.type}), кандидаты соперника: ${fmtCands(f.cands)}`); onCode(f); return true;
   };
   const mode = async m => {
     stopCam(); act.replaceChildren(); aux.replaceChildren();
@@ -512,6 +563,7 @@ function scanView({ title, lead, want, onCode }) {
       try { await startCam($('video'), accept); }
       catch (e) {
         if (tok !== S.tok) return;   // пока камера отказывала, пользователь уже переключил режим
+        dlog('камера для сканирования: ' + e.kind);
         const [t, d] = camMsg[e.kind] || camMsg.busy;
         $('#ph').hidden = false; $('#ph').innerHTML = `<b>${t}</b><span>${d}</span>`;
         $('video').hidden = $('.vf').hidden = true;
@@ -559,7 +611,7 @@ function connectView() {
   mount();
   S.tick = setInterval(() => {
     const e = Date.now() - t0; $('#bar').style.width = Math.min(100, e / S.timeout * 100) + '%';
-    if (e >= S.timeout) go('fail');
+    if (e >= S.timeout) { dlog('таймаут соединения'); go('fail'); }
   }, 200);
 }
 function failView() {
@@ -574,7 +626,8 @@ function failView() {
       <li><b>VPN и экономия трафика.</b> Выключите на обоих.</li>
       <li><b>iPhone:</b> Настройки → браузер → разрешите «Локальную сеть».</li>
       <li><b>Коды одноразовые.</b> После новой попытки нужны новые коды.</li>
-    </ul></div>
+    </ul>
+    <p>Не помогло? Нажмите «Лог» вверху экрана, скопируйте текст и пришлите — по нему видно, на каком шаге остановилось соединение.</p></div>
   <div class="actions"><button class="btn primary" id="again">Попробовать снова</button><button class="btn" id="fresh">Выбрать роль заново</button></div>`;
   mount();
   if (err) $('#lead').textContent = 'Что-то пошло не так: ' + (err.message || err);
@@ -734,7 +787,7 @@ function setOv(big, txt, btn) {   // txt === null — скрыть
   $('#ov').hidden = txt === null; $('#ovbig').textContent = big || ''; $('#ovtxt').textContent = txt || ''; $('#ovbtn').hidden = !btn;
   if (btn) $('#ovbtn').focus();
 }
-function showLost(msg) { if (!G || G.lost) return; G.lost = true; cancelAnimationFrame(raf); setOv('', msg, true); }
+function showLost(msg) { if (!G || G.lost) return; dlog('игра остановлена: ' + msg); G.lost = true; cancelAnimationFrame(raf); setOv('', msg, true); }
 function exitGame() { G = null; cancelAnimationFrame(raf); $('#game').hidden = true; $('#app').hidden = false; resetAll(); }
 $('#ovbtn').onclick = exitGame;
 
