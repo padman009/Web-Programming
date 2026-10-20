@@ -185,7 +185,7 @@ function dlog(msg) {
   LOG.push(`+${((Date.now() - logT0) / 1000).toFixed(1)}s ${msg}`);
   if (!logBox.hidden) renderLog();
 }
-const fmtCands = cs => cs.map(c => c.addr + ':' + c.port).join(', ') || 'нет';
+const fmtCands = cs => cs.map(c => (c.addr.includes(':') ? `[${c.addr}]` : c.addr) + ':' + c.port + (c.srflx ? ' (внешний)' : '')).join(', ') || 'нет';
 $('#logbtn').onclick = () => { logBox.hidden = false; renderLog(); logTxt.scrollTop = 1e9; };
 $('#logclose').onclick = () => { logBox.hidden = true; };
 $('#logcopy').onclick = e => copyTo(e.target, LOG.join('\n'), 'Выделите текст и скопируйте');
@@ -200,7 +200,7 @@ dlog(`старт: ${location.protocol}//${location.host}, secure=${hasSecure}, �
 const Codec = (() => {
   const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';   // Crockford: нет I L O U
   const HEX = '0123456789abcdef', B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-  const VERSION = 1, T_V4 = 0, T_MDNS = 2;
+  const VERSION = 1, T_V4 = 0, T_V6 = 1, T_MDNS = 2, T_SRFLX = 3;   // тип кандидата (2 бита): IPv4 host, IPv6 host, mDNS-имя, внешний IPv4 от STUN
 
   const b64 = bytes => { let o = ''; for (let i = 0; i < bytes.length; i += 3) { const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2]; o += B64[n >> 18] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63]; } return o; };
   const deriveCreds = fp => ({ ufrag: b64(fp.slice(0, 3)), pwd: b64(fp.slice(3, 21)) });
@@ -242,7 +242,16 @@ const Codec = (() => {
   }
 
   const isV4 = a => /^\d{1,3}(\.\d{1,3}){3}$/.test(a);
+  const isGlobalV6 = a => /^[23][0-9a-f]{0,3}(:[0-9a-f]{0,4}){2,7}$/i.test(a);   // глобальный 2000::/3: link-local и ULA через интернет не годятся
   const isMdns = a => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.local$/i.test(a);
+
+  function v6bytes(a) {
+    const [h, t] = a.split('::'), hs = h ? h.split(':') : [], ts = t ? t.split(':') : [];
+    const parts = hs.concat(Array(a.includes('::') ? 8 - hs.length - ts.length : 0).fill('0'), ts);
+    if (parts.length !== 8) throw new Error('bad v6');
+    return parts.flatMap(x => { const v = parseInt(x, 16); return [v >> 8, v & 255]; });
+  }
+  const v6str = b => Array.from({ length: 8 }, (_, i) => ((b[2 * i] << 8) | b[2 * i + 1]).toString(16)).join(':');
 
   function parseSdp(sdp) {
     const L = sdp.split(/\r?\n/);
@@ -254,24 +263,28 @@ const Codec = (() => {
     if (alg.toLowerCase() !== 'sha-256' || fp.length !== 32) throw new Error('unsupported fingerprint');
     const cands = [];
     for (const l of L) {
-      const m = l.match(/^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ host/i);
-      if (m) cands.push({ addr: m[1], port: +m[2] });
+      const m = l.match(/^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ (host|srflx)/i);
+      if (m) cands.push({ addr: m[1], port: +m[2], srflx: m[3].toLowerCase() === 'srflx' });
     }
     return { ufrag: g(/^a=ice-ufrag:(\S+)/), pwd: g(/^a=ice-pwd:(\S+)/), fp, cands, mid: g(/^a=mid:(\S+)/) || '0', type: /^a=setup:actpass/m.test(sdp) ? 'offer' : 'answer' };
   }
 
-  /* -> Uint8Array. Кандидаты: сначала IPv4 (кроме 127.*, 0.*), потом mDNS; не больше 8 */
+  /* -> Uint8Array. Кандидаты по порядку: внешний адрес (STUN), IPv4 (кроме 127.*, 0.*, 169.254.*), один глобальный IPv6, mDNS-имя; не больше 8 */
   function encode(sdp) {
     const p = parseSdp(sdp), d = deriveCreds(p.fp), derived = p.ufrag === d.ufrag && p.pwd === d.pwd;
-    const sel = p.cands.flatMap(c => isV4(c.addr) ? (/^(127|0|169\.254)\./.test(c.addr) ? [] : [{ t: T_V4, ...c }]) : isMdns(c.addr) ? [{ t: T_MDNS, ...c }] : [])
-      .sort((a, b) => a.t - b.t).slice(0, 8);
+    const rank = t => [T_SRFLX, T_V4, T_V6, T_MDNS].indexOf(t); let v6 = 0;
+    const sel = p.cands.flatMap(c =>
+      isV4(c.addr) ? (/^(127|0|169\.254)\./.test(c.addr) ? [] : [{ t: c.srflx ? T_SRFLX : T_V4, ...c }])
+        : c.srflx ? [] : isMdns(c.addr) ? [{ t: T_MDNS, ...c }] : isGlobalV6(c.addr) ? [{ t: T_V6, ...c }] : [])
+      .sort((a, b) => rank(a.t) - rank(b.t)).filter(c => c.t !== T_V6 || !v6++).slice(0, 8);
     const w = new BitW();
     w.put(VERSION, 2); w.put(derived ? 1 : 0, 1); w.put(p.type === 'answer' ? 1 : 0, 1); w.put(sel.length, 4);
     p.fp.forEach(b => w.put(b, 8));
     if (!derived) { putStr(w, p.ufrag); putStr(w, p.pwd); }
     for (const c of sel) {
       w.put(c.t, 2);
-      if (c.t === T_V4) c.addr.split('.').forEach(x => w.put(+x, 8));
+      if (c.t === T_V4 || c.t === T_SRFLX) c.addr.split('.').forEach(x => w.put(+x, 8));
+      else if (c.t === T_V6) v6bytes(c.addr).forEach(x => w.put(x, 8));
       else c.addr.replace('.local', '').replace(/-/g, '').match(/../g).forEach(h => w.put(parseInt(h, 16), 8));
       w.put(c.port, 16);
     }
@@ -290,10 +303,11 @@ const Codec = (() => {
     const cands = [];
     for (let i = 0; i < n; i++) {
       const t = r.get(2); let addr;
-      if (t === T_V4) addr = [r.get(8), r.get(8), r.get(8), r.get(8)].join('.');
+      if (t === T_V4 || t === T_SRFLX) addr = [r.get(8), r.get(8), r.get(8), r.get(8)].join('.');
+      else if (t === T_V6) addr = v6str(Array.from({ length: 16 }, () => r.get(8)));
       else if (t === T_MDNS) { const h = Array.from({ length: 16 }, () => (r.get(8) + 256).toString(16).slice(1)).join(''); addr = [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20)].join('-') + '.local'; }
       else throw new Error('candidate type');
-      cands.push({ addr, port: r.get(16) });
+      cands.push({ addr, port: r.get(16), srflx: t === T_SRFLX });
     }
     if (body.length * 8 - r.p >= 8) throw new Error('length');   // префикс настоящего кода не должен проходить проверку
     return { type, fp, ufrag, pwd, cands };
@@ -304,7 +318,7 @@ const Codec = (() => {
     return [
       'v=0', 'o=- 4611731400430051336 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE ' + mid, 'a=msid-semantic: WMS',
       'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0',
-      ...f.cands.map((c, i) => `a=candidate:${i + 1} 1 udp ${2122194687 - i * 256} ${c.addr} ${c.port} typ host generation 0`),
+      ...f.cands.map((c, i) => `a=candidate:${i + 1} 1 udp ${(c.srflx ? 1686110207 : 2122194687) - i * 256} ${c.addr} ${c.port} typ ${c.srflx ? 'srflx raddr 0.0.0.0 rport 0' : 'host'} generation 0`),
       'a=ice-ufrag:' + f.ufrag, 'a=ice-pwd:' + f.pwd, 'a=ice-options:trickle', 'a=fingerprint:sha-256 ' + fpS,
       'a=setup:' + (f.type === 'offer' ? 'actpass' : 'active'), 'a=mid:' + mid, 'a=sctp-port:5000', 'a=max-message-size:262144', ''
     ].join('\r\n');
@@ -328,8 +342,11 @@ const Codec = (() => {
   return { munge, encode, decodeFields, buildSdp, parseSdp, toB32, fromB32 };
 })();
 
-/* ====== соединение: WebRTC без сигнального сервера и без STUN ====== */
-const ICE_MAX = 3000, ICE_IDLE = 500;
+/* ====== соединение: WebRTC без сигнального сервера ======
+ * STUN нужен только чтобы узнать свой внешний адрес (для игры через интернет): публичные серверы, без ключей и аккаунтов.
+ * В локальной сети и без интернета он просто не отвечает. Для строгих NAT понадобился бы TURN (ретранслятор) — сюда он добавляется как ещё один сервер. */
+const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
+const ICE_MAX = 4000, ICE_IDLE = 1200;
 let pc = null, chG = null, chC = null;   // chG — состояние игры (без гарантий доставки), chC — события (надёжный)
 
 function netClose() {
@@ -338,7 +355,7 @@ function netClose() {
 }
 function netInit() {
   netClose();
-  pc = new RTCPeerConnection({ iceServers: [] });
+  pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
   const p = pc;
   // negotiated: каналы создаются по id на обеих сторонах, нет гонки с ondatachannel
   chG = pc.createDataChannel('g', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
@@ -384,7 +401,7 @@ async function warmCamera() {   // доступ к камере, а если е�
   dlog('в кандидатах будут mDNS-имена *.local: второму устройству нужен multicast, чтобы их разрешить');
 }
 
-/* ждём ICE-кандидатов: complete, либо 500 мс тишины после первого, либо 3 с */
+/* ждём ICE-кандидатов: complete, либо 1.2 с тишины после первого (ответ STUN приходит позже локальных адресов), либо 4 с */
 const gathered = p => new Promise(res => {
   let n = 0, last = Date.now(); const t0 = last;
   p.onicecandidate = e => { if (e.candidate) { n++; last = Date.now(); dlog('свой кандидат: ' + e.candidate.candidate.replace(/^candidate:\S+ \d+ (\w+) \d+ (\S+) (\d+) typ (\w+).*$/, '$4 $1 $2:$3')); } };
@@ -399,6 +416,9 @@ async function setLocal(p, desc) {   // p передаём явно: пока ж
   catch (e) { await p.setLocalDescription(desc); }   // браузер не дал подменить ICE-креды — они уйдут в код как есть
   await wait;
   const bytes = Codec.encode(p.localDescription.sdp), code = Codec.toB32(bytes);
+  const ext = Codec.parseSdp(p.localDescription.sdp).cands.filter(c => c.srflx);
+  dlog(!ext.length ? 'STUN: внешний адрес не получен (нет интернета или STUN заблокирован) — работает только локальная сеть'
+    : `STUN: внешний адрес ${fmtCands(ext)}` + (new Set(ext.map(c => c.port)).size > 1 ? ' — порты разные, это симметричный NAT: напрямую через интернет вряд ли соединиться' : ''));
   dlog(`наш код: ${code.length} символов, кандидаты в нём: ${fmtCands(Codec.decodeFields(bytes).cands)}`);
   return code;
 }
@@ -660,7 +680,7 @@ function failView() {
   <div class="text"><h1 id="title">Не удалось соединиться</h1>
     <p class="big" id="lead">Телефоны не нашли друг друга. Чаще всего дело в сети:</p>
     <ul class="why">
-      <li><b>Разные сети.</b> Оба устройства должны быть в одной Wi‑Fi, не на мобильном интернете.</li>
+      <li><b>Разные сети.</b> Через интернет устройства соединяются напрямую (STUN), но строгий NAT у оператора или роутера это блокирует. Тогда подключитесь к одной Wi‑Fi или включите на одном телефоне точку доступа.</li>
       <li><b>«Изоляция клиентов»</b> в роутере (гостевая или публичная Wi‑Fi). Включите на одном телефоне точку доступа и подключите второй к ней — это работает без интернета.</li>
       <li><b>VPN и экономия трафика.</b> Выключите на обоих.</li>
       <li><b>iPhone:</b> Настройки → браузер → разрешите «Локальную сеть».</li>
@@ -679,7 +699,7 @@ const VIEWS = {
     S.role = null;
     card.innerHTML = `
     <div class="text" style="text-align:center;grid-column:1/-1"><h1 id="title" style="font-size:clamp(1.6rem,7vw,2.2rem)">Пинг-понг для двоих</h1>
-    <p class="big">Играйте вдвоём по одной Wi‑Fi сети. Интернет и сервер не нужны.</p></div>
+    <p class="big">Играйте вдвоём: по одной Wi‑Fi сети интернет не нужен, а через интернет устройства соединяются напрямую.</p></div>
     <div class="actions inline" style="grid-column:1/-1;max-width:420px;width:100%;justify-self:center">
       <button class="btn primary" id="mk">Создать игру<br><small style="font-weight:400">вы покажете QR-код</small></button>
       <button class="btn" id="jn">Присоединиться<br><small style="font-weight:400;color:var(--muted)">вы отсканируете QR-код</small></button></div>
