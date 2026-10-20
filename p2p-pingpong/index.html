@@ -185,7 +185,8 @@ function dlog(msg) {
   LOG.push(`+${((Date.now() - logT0) / 1000).toFixed(1)}s ${msg}`);
   if (!logBox.hidden) renderLog();
 }
-const fmtCands = cs => cs.map(c => (c.addr.includes(':') ? `[${c.addr}]` : c.addr) + ':' + c.port + (c.srflx ? ' (внешний)' : '')).join(', ') || 'нет';
+const hostPort = (addr, port) => (addr.includes(':') ? `[${addr}]` : addr) + ':' + port;   // IPv6 в скобках
+const fmtCands = cs => cs.map(c => hostPort(c.addr, c.port) + (c.srflx ? ' (внешний)' : '')).join(', ') || 'нет';
 $('#logbtn').onclick = () => { logBox.hidden = false; renderLog(); logTxt.scrollTop = 1e9; };
 $('#logclose').onclick = () => { logBox.hidden = true; };
 $('#logcopy').onclick = e => copyTo(e.target, LOG.join('\n'), 'Выделите текст и скопируйте');
@@ -194,13 +195,14 @@ const hasSecure = window.isSecureContext, hasCam = !!(navigator.mediaDevices && 
 dlog(`старт: ${location.protocol}//${location.host}, secure=${hasSecure}, камера=${hasCam}, ${navigator.userAgent}`);
 
 /* ====== кодек: SDP data-channel-only <-> короткий текст из 0-9A-Z ======
- * В код попадают только fingerprint DTLS, ICE-кандидаты (IPv4 / mDNS) и CRC8. ICE ufrag/pwd выводятся из fingerprint
+ * В код попадают только fingerprint DTLS, ICE-кандидаты (IPv4, один глобальный IPv6, mDNS-имя, внешний адрес от STUN) и CRC8. ICE ufrag/pwd выводятся из fingerprint
  * (munge своего SDP), остальной SDP достраивается по шаблону. Offer ~66-85 символов, answer ещё короче.
  * Короткий код из 4-8 символов невозможен: одни только 256 бит fingerprint — это 52 символа. */
 const Codec = (() => {
   const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';   // Crockford: нет I L O U
   const HEX = '0123456789abcdef', B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
   const VERSION = 1, T_V4 = 0, T_V6 = 1, T_MDNS = 2, T_SRFLX = 3;   // тип кандидата (2 бита): IPv4 host, IPv6 host, mDNS-имя, внешний IPv4 от STUN
+  const ORDER = [T_SRFLX, T_V4, T_V6, T_MDNS];   // в каком порядке кандидаты идут в код (при переполнении последние отпадают)
 
   const b64 = bytes => { let o = ''; for (let i = 0; i < bytes.length; i += 3) { const n = (bytes[i] << 16) | (bytes[i + 1] << 8) | bytes[i + 2]; o += B64[n >> 18] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63]; } return o; };
   const deriveCreds = fp => ({ ufrag: b64(fp.slice(0, 3)), pwd: b64(fp.slice(3, 21)) });
@@ -224,6 +226,10 @@ const Codec = (() => {
     }
     return v;
   };
+
+  BitW.prototype.putBytes = function (a) { a.forEach(x => this.put(x, 8)); };
+  BitR.prototype.bytes = function (n) { return Array.from({ length: n }, () => this.get(8)); };
+  const hex2 = b => (b + 256).toString(16).slice(1);
 
   const crc8 = a => { let c = 0; for (const x of a) { c ^= x; for (let i = 0; i < 8; i++) c = (c & 0x80) ? ((c << 1) ^ 0x07) & 0xff : (c << 1) & 0xff; } return c; };
 
@@ -264,7 +270,7 @@ const Codec = (() => {
     const cands = [];
     for (const l of L) {
       const m = l.match(/^a=candidate:\S+ 1 udp \d+ (\S+) (\d+) typ (host|srflx)(?: raddr (\S+) rport (\d+))?/i);
-      if (m) cands.push({ addr: m[1], port: +m[2], srflx: m[3].toLowerCase() === 'srflx', base: m[4] ? m[4] + ':' + m[5] : '' });   // base — с какого локального адреса получен внешний
+      if (m) cands.push({ addr: m[1], port: +m[2], srflx: m[3].toLowerCase() === 'srflx', raddr: m[4], rport: m[5] });   // raddr:rport — с какого локального адреса получен внешний
     }
     return { ufrag: g(/^a=ice-ufrag:(\S+)/), pwd: g(/^a=ice-pwd:(\S+)/), fp, cands, mid: g(/^a=mid:(\S+)/) || '0', type: /^a=setup:actpass/m.test(sdp) ? 'offer' : 'answer' };
   }
@@ -272,20 +278,19 @@ const Codec = (() => {
   /* -> Uint8Array. Кандидаты по порядку: внешний адрес (STUN), IPv4 (кроме 127.*, 0.*, 169.254.*), один глобальный IPv6, mDNS-имя; не больше 8 */
   function encode(sdp) {
     const p = parseSdp(sdp), d = deriveCreds(p.fp), derived = p.ufrag === d.ufrag && p.pwd === d.pwd;
-    const rank = t => [T_SRFLX, T_V4, T_V6, T_MDNS].indexOf(t); let v6 = 0;
     const sel = p.cands.flatMap(c =>
       isV4(c.addr) ? (/^(127|0|169\.254)\./.test(c.addr) ? [] : [{ t: c.srflx ? T_SRFLX : T_V4, ...c }])
         : c.srflx ? [] : isMdns(c.addr) ? [{ t: T_MDNS, ...c }] : isGlobalV6(c.addr) ? [{ t: T_V6, ...c }] : [])
-      .sort((a, b) => rank(a.t) - rank(b.t)).filter(c => c.t !== T_V6 || !v6++).slice(0, 8);
+      .sort((a, b) => ORDER.indexOf(a.t) - ORDER.indexOf(b.t)).filter((c, i, all) => c.t !== T_V6 || all.findIndex(x => x.t === T_V6) === i).slice(0, 8);
     const w = new BitW();
     w.put(VERSION, 2); w.put(derived ? 1 : 0, 1); w.put(p.type === 'answer' ? 1 : 0, 1); w.put(sel.length, 4);
-    p.fp.forEach(b => w.put(b, 8));
+    w.putBytes(p.fp);
     if (!derived) { putStr(w, p.ufrag); putStr(w, p.pwd); }
     for (const c of sel) {
       w.put(c.t, 2);
-      if (c.t === T_V4 || c.t === T_SRFLX) c.addr.split('.').forEach(x => w.put(+x, 8));
-      else if (c.t === T_V6) v6bytes(c.addr).forEach(x => w.put(x, 8));
-      else c.addr.replace('.local', '').replace(/-/g, '').match(/../g).forEach(h => w.put(parseInt(h, 16), 8));
+      if (c.t === T_V4 || c.t === T_SRFLX) w.putBytes(c.addr.split('.').map(Number));
+      else if (c.t === T_V6) w.putBytes(v6bytes(c.addr));
+      else w.putBytes(c.addr.replace('.local', '').replace(/-/g, '').match(/../g).map(h => parseInt(h, 16)));
       w.put(c.port, 16);
     }
     const body = w.done(); body.push(crc8(body));
@@ -298,14 +303,14 @@ const Codec = (() => {
     const r = new BitR(body);
     if (r.get(2) !== VERSION) throw new Error('version');
     const derived = r.get(1), type = r.get(1) ? 'answer' : 'offer', n = r.get(4);
-    const fp = Array.from({ length: 32 }, () => r.get(8));
+    const fp = r.bytes(32);
     const { ufrag, pwd } = derived ? deriveCreds(fp) : { ufrag: getStr(r), pwd: getStr(r) };
     const cands = [];
     for (let i = 0; i < n; i++) {
       const t = r.get(2); let addr;
-      if (t === T_V4 || t === T_SRFLX) addr = [r.get(8), r.get(8), r.get(8), r.get(8)].join('.');
-      else if (t === T_V6) addr = v6str(Array.from({ length: 16 }, () => r.get(8)));
-      else if (t === T_MDNS) { const h = Array.from({ length: 16 }, () => (r.get(8) + 256).toString(16).slice(1)).join(''); addr = [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20)].join('-') + '.local'; }
+      if (t === T_V4 || t === T_SRFLX) addr = r.bytes(4).join('.');
+      else if (t === T_V6) addr = v6str(r.bytes(16));
+      else if (t === T_MDNS) { const h = r.bytes(16).map(hex2).join(''); addr = [h.slice(0, 8), h.slice(8, 12), h.slice(12, 16), h.slice(16, 20), h.slice(20)].join('-') + '.local'; }
       else throw new Error('candidate type');
       cands.push({ addr, port: r.get(16), srflx: t === T_SRFLX });
     }
@@ -314,12 +319,12 @@ const Codec = (() => {
   }
 
   const candAttr = (c, i) => `candidate:${i + 1} 1 udp ${(c.srflx ? 1686110207 : 2122194687) - i * 256} ${c.addr} ${c.port} typ ${c.srflx ? 'srflx raddr 0.0.0.0 rport 0' : 'host'} generation 0`;
-  function buildSdp(f, mid = '0', cands = true) {
-    const fpS = f.fp.map(b => (b + 256).toString(16).slice(1).toUpperCase()).join(':');
+  function buildSdp(f, mid = '0') {
+    const fpS = f.fp.map(b => hex2(b).toUpperCase()).join(':');
     return [
       'v=0', 'o=- 4611731400430051336 2 IN IP4 127.0.0.1', 's=-', 't=0 0', 'a=group:BUNDLE ' + mid, 'a=msid-semantic: WMS',
       'm=application 9 UDP/DTLS/SCTP webrtc-datachannel', 'c=IN IP4 0.0.0.0',
-      ...(cands ? f.cands.map((c, i) => 'a=' + candAttr(c, i)) : []),
+      ...f.cands.map((c, i) => 'a=' + candAttr(c, i)),
       'a=ice-ufrag:' + f.ufrag, 'a=ice-pwd:' + f.pwd, 'a=ice-options:trickle', 'a=fingerprint:sha-256 ' + fpS,
       'a=setup:' + (f.type === 'offer' ? 'actpass' : 'active'), 'a=mid:' + mid, 'a=sctp-port:5000', 'a=max-message-size:262144', ''
     ].join('\r\n');
@@ -344,10 +349,10 @@ const Codec = (() => {
 })();
 
 /* ====== соединение: WebRTC без сигнального сервера ======
- * STUN нужен только чтобы узнать свой внешний адрес (для игры через интернет): публичные серверы, без ключей и аккаунтов.
- * В локальной сети и без интернета он просто не отвечает. Для строгих NAT понадобился бы TURN (ретранслятор) — сюда он добавляется как ещё один сервер. */
+ * STUN нужен только чтобы узнать свой внешний адрес (игра через интернет): публичные серверы, без ключей. В локальной сети и без
+ * интернета он просто не отвечает. Для строгих NAT понадобился бы TURN-ретранслятор — он добавляется сюда ещё одним сервером. */
 const ICE_SERVERS = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun.cloudflare.com:3478'] }];
-const ICE_MAX = 4000, ICE_IDLE = 1200;
+const ICE_MAX = 4000, ICE_IDLE = 800, ICE_IDLE_STUN = 300;   // мс: потолок ожидания кандидатов; тишина после последнего (короче, когда внешний адрес уже получен)
 let pc = null, chG = null, chC = null;   // chG — состояние игры (без гарантий доставки), chC — события (надёжный)
 
 function netClose() {
@@ -377,6 +382,7 @@ function watchStats(p) {   // пока соединяемся, раз в 2 с к
   let prev = '';
   const iv = setInterval(async () => {
     if (p !== pc || ['connected', 'closed'].includes(p.connectionState)) return clearInterval(iv);
+    if (p.connectionState === 'new') return;   // проверки ещё не начались — пар нет, статистику не собираем
     const n = {}, t = { requestsSent: 0, responsesReceived: 0, requestsReceived: 0 };
     (await p.getStats()).forEach(r => { if (r.type === 'candidate-pair') { n[r.state] = (n[r.state] || 0) + 1; for (const k in t) t[k] += r[k] || 0; } });
     const line = 'пары кандидатов: ' + (Object.entries(n).map(([k, v]) => k + '×' + v).join(', ') || 'нет')   // «отправлено/ответов/получено» показывают, доходят ли пакеты в каждую сторону
@@ -386,7 +392,7 @@ function watchStats(p) {   // пока соединяемся, раз в 2 с к
 }
 async function logPair(p) {   // какая пара адресов в итоге победила
   const st = await p.getStats(), by = {}; st.forEach(r => { by[r.id] = r; });
-  const f = c => c ? `${c.candidateType} ${c.address || c.ip}:${c.port}` : '?';
+  const f = c => c ? `${c.candidateType} ${hostPort(c.address || c.ip, c.port)}` : '?';
   st.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') dlog(`выбрана пара: ${f(by[r.localCandidateId])} ↔ ${f(by[r.remoteCandidateId])}`); });
 }
 const sendOn = (ch, d) => ch && ch.readyState === 'open' && ch.send(d);
@@ -397,23 +403,31 @@ async function warmCamera() {   // доступ к камере, а если е�
   if (!hasCam) return;
   for (const [kind, ok, bad] of [['video', 'камера разрешена', 'камера недоступна'], ['audio', 'микрофон разрешён', 'микрофон недоступен']]) {
     try { stopTracks(await navigator.mediaDevices.getUserMedia({ [kind]: true })); return dlog(ok + ': в кандидатах будут реальные IP'); }
-    catch (e) { dlog(`${bad} (${e.name})`); if (e.name !== 'NotFoundError') break; }   // отказал пользователь — микрофон не просим
+    catch (e) { dlog(`${bad} (${e.name})`); if (e.name === 'NotAllowedError' || e.name === 'SecurityError') break; }   // пользователь отказал — микрофон не просим
   }
   dlog('в кандидатах будут mDNS-имена *.local: второму устройству нужен multicast, чтобы их разрешить');
 }
 
-/* ждём ICE-кандидатов: complete, либо 1.2 с тишины после первого (ответ STUN приходит позже локальных адресов), либо 4 с */
+/* ждём ICE-кандидатов: complete, либо тишина после последнего (ICE_IDLE; после ответа STUN короче), либо ICE_MAX */
 const gathered = p => new Promise(res => {
-  let n = 0, last = Date.now(); const t0 = last;
-  p.onicecandidate = e => { if (e.candidate) { n++; last = Date.now(); dlog('свой кандидат: ' + e.candidate.candidate.replace(/^candidate:\S+ \d+ (\w+) \d+ (\S+) (\d+) typ (\w+).*$/, '$4 $1 $2:$3')); } };
+  let n = 0, last = Date.now(), stun = false; const t0 = last;
+  p.onicecandidate = e => {
+    if (!e.candidate) return;
+    n++; last = Date.now(); stun ||= / typ srflx /.test(e.candidate.candidate);
+    const m = e.candidate.candidate.match(/ (\w+) \d+ (\S+) (\d+) typ (\w+)/);
+    dlog('свой кандидат: ' + (m ? `${m[4]} ${m[1]} ${hostPort(m[2], m[3])}` : e.candidate.candidate));
+  };
   const iv = setInterval(() => {
     const now = Date.now();
-    if (p.iceGatheringState === 'complete' || now - t0 > ICE_MAX || (n && now - last > ICE_IDLE)) { clearInterval(iv); p.onicecandidate = null; dlog(`сбор кандидатов закончен: ${n} шт.${n ? '' : ' — ни одного! Расширение или политика браузера блокирует WebRTC?'}`); res(); }
+    if (p.iceGatheringState === 'complete' || now - t0 > ICE_MAX || (n && now - last > (stun ? ICE_IDLE_STUN : ICE_IDLE))) {
+      clearInterval(iv); p.onicecandidate = null;
+      dlog(`сбор кандидатов закончен: ${n} шт.${n ? '' : ' — ни одного! Расширение или политика браузера блокирует WebRTC?'}`); res();
+    }
   }, 50);
 });
-function isSymmetricNat(ext) {   // разные порты у разных интерфейсов (Wi-Fi, Docker, VPN) — это нормально; признак — разные порты у одного локального адреса
+function isSymmetricNat(ext) {   // разные порты у разных интерфейсов (Wi-Fi, Docker, VPN) — норма; признак — разные порты у одного локального адреса
   const ports = {};
-  for (const c of ext) if (c.base && !c.base.startsWith('0.0.0.0')) (ports[c.base] ||= new Set()).add(c.port);
+  for (const c of ext) if (c.raddr && c.raddr !== '0.0.0.0') (ports[c.raddr + ':' + c.rport] ||= new Set()).add(c.port);
   return Object.values(ports).some(set => set.size > 1);
 }
 async function setLocal(p, desc) {   // p передаём явно: пока ждём, пользователь мог начать заново, и глобальный pc уже другой
@@ -423,29 +437,33 @@ async function setLocal(p, desc) {   // p передаём явно: пока ж
   await wait;
   const bytes = Codec.encode(p.localDescription.sdp), code = Codec.toB32(bytes);
   const ext = Codec.parseSdp(p.localDescription.sdp).cands.filter(c => c.srflx);
-  dlog(!ext.length ? 'STUN: внешний адрес не получен (нет интернета или STUN заблокирован) — работает только локальная сеть'
-    : `STUN: внешний адрес ${fmtCands(ext)}` + (isSymmetricNat(ext) ? ' — один и тот же локальный адрес получил разные внешние порты: NAT симметричный, напрямую через интернет вряд ли соединиться' : ''));
   dlog(`наш код: ${code.length} символов, кандидаты в нём: ${fmtCands(Codec.decodeFields(bytes).cands)}`);
+  if (!ext.length) dlog('STUN: внешний адрес не получен (нет интернета или STUN заблокирован) — работает только локальная сеть');
+  else if (isSymmetricNat(ext)) dlog('STUN: один и тот же локальный адрес получил разные внешние порты — NAT симметричный, напрямую через интернет вряд ли соединиться');
   return code;
 }
-async function makeOffer(alive) {
+async function openPc(alive) {   // общее начало offer и answer: медиадоступ (чтобы в кандидатах были реальные IP) и новое соединение
   await warmCamera();
-  if (!alive()) return;   // пока ждали разрешение камеры, пользователь ушёл с экрана
-  const p = netInit();
-  return setLocal(p, await p.createOffer());
+  if (alive()) return netInit();   // иначе пока ждали разрешение, пользователь ушёл с экрана
 }
-async function takeOffer(f) {
-  const p = netInit();
-  // Адреса хоста пока не добавляем: иначе проверки соединения стартуют сразу и за время, пока хост вводит ответ (десятки секунд при ручной
-  // передаче), заканчиваются ошибкой и закрывают соединение, да и NAT успевает закрыть «окно». Хост сам достучится до нас, если сети позволяют,
-  // а через интернет проверки запускает кнопка (startChecks), когда хост уже ввёл ответ.
-  await p.setRemoteDescription({ type: 'offer', sdp: Codec.buildSdp(f, '0', false) });
+async function makeOffer(alive) {
+  const p = await openPc(alive);
+  if (p) return setLocal(p, await p.createOffer());
+}
+async function takeOffer(f, alive) {
+  const p = await openPc(alive);
+  if (!p) return;
+  // Адреса хоста добавим позже (startChecks): если проверки стартуют сразу, они кончатся ошибкой, пока хост вводит ответ, и NAT закроет «окно»
+  await p.setRemoteDescription({ type: 'offer', sdp: Codec.buildSdp({ ...f, cands: [] }) });
   watchStats(p);
   return setLocal(p, await p.createAnswer());
 }
-function startChecks(f) {
+function startChecks() {   // клиент: хост уже ввёл ответ — добавляем его адреса, и проверки идут с обеих сторон одновременно
+  const p = pc;
+  if (!p) return;
   dlog('клиент: добавляем адреса хоста, проверки начинаются');
-  f.cands.forEach((c, i) => pc.addIceCandidate({ candidate: Codec.candAttr(c, i), sdpMid: '0', sdpMLineIndex: 0 }).catch(e => dlog('адрес хоста не принят: ' + e.message)));
+  const mid = Codec.parseSdp(p.localDescription.sdp).mid;
+  S.offer.cands.forEach((c, i) => p.addIceCandidate({ candidate: Codec.candAttr(c, i), sdpMid: mid }).catch(e => dlog('адрес хоста не принят: ' + e.message)));
 }
 async function takeAnswer(f) {
   const p = pc;
@@ -613,11 +631,12 @@ function scanView({ title, lead, want, onCode }) {
     let f;
     try { f = parseCode(text, want); }
     catch (e) {
-      const show = !quiet || e.message === 'type';   // при наборе молчим про «не код», но чужой полный код — однозначная ошибка
+      const show = !quiet || /^(type|version|candidate type)$/.test(e.message);   // при наборе молчим про «не код», но чужой полный код — однозначная ошибка
       if (show && text !== bad) {
         dlog('код отвергнут: ' + e.message);
         note(e.message === 'type'
           ? (want === 'offer' ? 'Это ответный код. Здесь нужен код того, кто нажал «Создать игру».' : 'Это код хозяина. Здесь нужен ответный код второго игрока.')
+          : /^(version|candidate type)$/.test(e.message) ? 'Код от другой версии игры: обновите страницу на обоих устройствах.'
           : 'Это не код игры. Нужен QR-код или код из этого же приложения на втором телефоне.');
       }
       if (show) bad = text;
@@ -739,10 +758,11 @@ const VIEWS = {
   },
   'c-show'() {
     loadingView('Готовим ответ…');
-    run(() => takeOffer(S.offer), code => showView(code, {
+    const wan = S.offer.cands.some(c => c.srflx);   // у хоста есть внешний адрес: возможна игра через интернет
+    run(alive => takeOffer(S.offer, alive), code => showView(code, {
       title: 'Покажите ответ хозяину', lead: 'Хозяин сканирует этот QR-код своим телефоном.',
-      tail: 'Игра начнётся сама, как только хозяин введёт код. Если вы в разных сетях (через интернет), нажмите кнопку ниже сразу после того, как хозяин ввёл ваш код.',
-      next: () => { startChecks(S.offer); go('connect'); }, nextLabel: 'Хозяин ввёл код — подключаться'
+      tail: 'Игра начнётся сама, как только хозяин введёт код.' + (wan ? ' Если вы в разных сетях (через интернет), нажмите кнопку ниже сразу после того, как хозяин ввёл ваш код.' : ''),
+      next: wan ? () => { startChecks(); go('connect'); } : null, nextLabel: 'Хозяин ввёл код — подключаться'
     }));
   },
   connect: connectView,
