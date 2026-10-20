@@ -9,7 +9,7 @@
 <style>
 :root{
   --bg:#0b0f14; --card:#151b23; --line:#2a3445; --text:#eef2f7; --muted:#9aa7b8;
-  --accent:#2ee6c5; --accent-ink:#04201a; --danger:#ff6b81;
+  --accent:#2ee6c5; --accent-ink:#04201a; --danger:#ff6b81; --pw:280px; --pbs:44px;   /* ширина панели паузы и сторона кнопки паузы (читает и JS) */
   --vis:min(80vw,70dvh,440px);          /* размер QR / видео */
   --pad:16px;
 }
@@ -100,6 +100,13 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 @media (max-width:359px){ :root{--pad:12px} .btn{padding:10px 12px} }
 @media (max-height:420px) and (orientation:landscape){ .top{min-height:36px} .text h1{font-size:1.15rem} .text p{font-size:.92rem} }
 
+/* журнал соединения (кнопка «Лог») */
+#logbox{position:fixed;inset:0;z-index:10;display:flex;flex-direction:column;gap:10px;background:var(--bg);
+  padding:max(12px,env(safe-area-inset-top)) max(var(--pad),env(safe-area-inset-right)) max(12px,env(safe-area-inset-bottom)) max(var(--pad),env(safe-area-inset-left))}
+#logbox pre{flex:1;min-height:0;margin:0;overflow:auto;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px;
+  font:.75rem/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;word-break:break-all;-webkit-user-select:text;user-select:text}
+#logbox .actions{grid-auto-flow:column;grid-auto-columns:1fr}
+
 /* ---------- игра ---------- */
 #game{position:fixed;inset:0;height:100vh;height:100dvh;background:#05070a;touch-action:none;overscroll-behavior:none;overflow:hidden;
   padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
@@ -111,6 +118,23 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 .overlay .btn{pointer-events:auto}
 .overlay p{margin:0;color:var(--muted);font-size:1.15rem}
 .count{font:800 min(40vw,40dvh,200px)/1 system-ui;color:var(--accent)}
+/* пауза: лёгкое затемнение, кнопка и панель стоят в пустых полях рядом с полем (позиции считает placeUI), а если места нет — поверх поля */
+#dim{position:absolute;inset:0;background:rgba(5,7,10,.5);pointer-events:none}
+.pmini{position:absolute;width:var(--pbs);height:var(--pbs);padding:0;display:grid;place-items:center;border-radius:12px;border:1px solid var(--line);background:rgba(21,27,35,.75);color:var(--text);cursor:pointer}
+.pmini.over{opacity:.55}
+.pause{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:min(var(--pw),calc(100% - 32px));padding:20px 16px;border-radius:18px;background:rgba(21,27,35,.94);border:1px solid var(--line);text-align:center;display:grid;gap:12px}
+.pause h2{margin:0;font-size:1.4rem}
+.pscore{display:flex;justify-content:center;align-items:flex-start;gap:18px}
+.pscore div{display:grid;justify-items:center;gap:4px;min-width:84px}
+.pscore b,.pscore i{font:800 2.6rem/1 system-ui}
+.pscore span,.plead{color:var(--muted);font-size:.9rem}
+.pscore i{font-style:normal;color:var(--muted)}
+.plead{margin:0}
+.pbtns{display:flex;justify-content:center;gap:16px;margin-top:4px}
+.pbtn{display:grid;justify-items:center;align-content:start;gap:8px;width:112px;padding:0;background:none;border:0;color:var(--text);font:inherit;font-size:.9rem;line-height:1.25;cursor:pointer}
+.pbtn .ic{width:68px;height:68px;border-radius:50%;display:grid;place-items:center;background:var(--card);border:1px solid var(--line)}
+.pbtn.go .ic{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.pbtn:hover .ic{filter:brightness(1.12)}
 </style>
 </head>
 <body>
@@ -118,6 +142,7 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
   <div class="top">
     <button class="link" id="back" hidden>‹ Начать заново</button>
     <span class="dots" id="dots" role="img" aria-label=""></span>
+    <button class="link" id="logbtn">Лог</button>
   </div>
   <div class="scroller"><section class="card" id="card" aria-labelledby="title"></section></div>
   <div id="foot"></div>
@@ -127,18 +152,46 @@ ul.why{margin:6px 0 0;padding-left:1.1em;color:var(--muted)} ul.why li{margin:4p
 <div id="game" hidden>
   <canvas id="cv" aria-label="Игровое поле"></canvas>
   <div class="hint" id="hint">Ваша ракетка внизу — ведите пальцем или мышью</div>
+  <div id="dim" hidden></div>
+  <section class="pause" id="pause" hidden role="dialog" aria-labelledby="ptitle">
+    <h2 id="ptitle">Пауза</h2>
+    <div class="pscore"><div><b id="psme">0</b><span>Вы</span></div><i>:</i><div><b id="psfoe">0</b><span>Соперник</span></div></div>
+    <p class="plead" id="plead"></p>
+    <div class="pbtns">
+      <button class="pbtn go" id="presume"><span class="ic"><svg width="30" height="30" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span>Продолжить игру</button>
+      <button class="pbtn" id="pexit"><span class="ic"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg></span>Выйти из игры</button>
+    </div>
+  </section>
+  <button class="pmini" id="pausebtn" hidden aria-label="Пауза"><svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
   <div class="overlay" id="ov" hidden role="status" aria-live="assertive">
     <div class="count" id="ovbig"></div><p id="ovtxt"></p>
     <button class="btn primary" id="ovbtn" hidden>В меню</button>
   </div>
 </div>
 
+<div id="logbox" hidden role="dialog" aria-label="Журнал соединения">
+  <pre id="logtxt" tabindex="0"></pre>
+  <div class="actions"><button class="btn primary" id="logcopy">Скопировать</button><button class="btn" id="logclose">Закрыть</button></div>
+</div>
+
 <script>
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
 const live = t => { $('#live').textContent = ''; setTimeout(() => $('#live').textContent = t, 30); };
+/* Журнал для диагностики: что собрал браузер, что пришло от второго устройства, как шли ICE-проверки */
+const LOG = [], logT0 = Date.now(), logBox = $('#logbox'), logTxt = $('#logtxt');
+const renderLog = () => { logTxt.textContent = LOG.join('\n'); };
+function dlog(msg) {
+  LOG.push(`+${((Date.now() - logT0) / 1000).toFixed(1)}s ${msg}`);
+  if (!logBox.hidden) renderLog();
+}
+const fmtCands = cs => cs.map(c => c.addr + ':' + c.port).join(', ') || 'нет';
+$('#logbtn').onclick = () => { logBox.hidden = false; renderLog(); logTxt.scrollTop = 1e9; };
+$('#logclose').onclick = () => { logBox.hidden = true; };
+$('#logcopy').onclick = e => copyTo(e.target, LOG.join('\n'), 'Выделите текст и скопируйте');
 const stopTracks = st => st.getTracks().forEach(t => t.stop());
 const hasSecure = window.isSecureContext, hasCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+dlog(`старт: ${location.protocol}//${location.host}, secure=${hasSecure}, камера=${hasCam}, ${navigator.userAgent}`);
 
 /* ====== кодек: SDP data-channel-only <-> короткий текст из 0-9A-Z ======
  * В код попадают только fingerprint DTLS, ICE-кандидаты (IPv4 / mDNS) и CRC8. ICE ufrag/pwd выводятся из fingerprint
@@ -207,11 +260,11 @@ const Codec = (() => {
     return { ufrag: g(/^a=ice-ufrag:(\S+)/), pwd: g(/^a=ice-pwd:(\S+)/), fp, cands, mid: g(/^a=mid:(\S+)/) || '0', type: /^a=setup:actpass/m.test(sdp) ? 'offer' : 'answer' };
   }
 
-  /* -> Uint8Array. Кандидаты: сначала IPv4 (кроме 127.*, 0.*), потом mDNS; не больше 4 */
+  /* -> Uint8Array. Кандидаты: сначала IPv4 (кроме 127.*, 0.*), потом mDNS; не больше 8 */
   function encode(sdp) {
     const p = parseSdp(sdp), d = deriveCreds(p.fp), derived = p.ufrag === d.ufrag && p.pwd === d.pwd;
     const sel = p.cands.flatMap(c => isV4(c.addr) ? (/^(127|0|169\.254)\./.test(c.addr) ? [] : [{ t: T_V4, ...c }]) : isMdns(c.addr) ? [{ t: T_MDNS, ...c }] : [])
-      .sort((a, b) => a.t - b.t).slice(0, 4);
+      .sort((a, b) => a.t - b.t).slice(0, 8);
     const w = new BitW();
     w.put(VERSION, 2); w.put(derived ? 1 : 0, 1); w.put(p.type === 'answer' ? 1 : 0, 1); w.put(sel.length, 4);
     p.fp.forEach(b => w.put(b, 8));
@@ -290,28 +343,49 @@ function netInit() {
   // negotiated: каналы создаются по id на обеих сторонах, нет гонки с ondatachannel
   chG = pc.createDataChannel('g', { negotiated: true, id: 0, ordered: false, maxRetransmits: 0 });
   chC = pc.createDataChannel('c', { negotiated: true, id: 1 });
+  const L = m => { if (p === pc) dlog(m); };   // события уже закрытого соединения в журнал не пишем
   chC.onopen = () => { clearInterval(S.tick); startGame(S.role === 'host'); };
   chG.onmessage = e => { if (G) { G.rx = performance.now(); onState(JSON.parse(e.data)); } };
   chC.onmessage = e => { if (G) { G.rx = performance.now(); onControl(e.data); } };
+  p.onicecandidateerror = e => L(`ошибка ICE: ${e.errorCode} ${e.errorText}`);
   pc.onconnectionstatechange = () => {   // 'disconnected' в игре бывает кратковременным — там обрыв ловит таймаут тишины
-    const st = p.connectionState;
+    const st = p.connectionState; L('соединение: ' + st);
+    if (st === 'connected') logPair(p);
     if (st === 'failed' || st === 'closed' || (st === 'disconnected' && !G)) netDown();
   };
   return p;
+}
+function watchStats(p) {   // пока соединяемся, раз в 2 с коротко пишем, что делают ICE-проверки
+  let prev = '';
+  const iv = setInterval(async () => {
+    if (p !== pc || ['connected', 'closed'].includes(p.connectionState)) return clearInterval(iv);
+    const n = {}; (await p.getStats()).forEach(r => { if (r.type === 'candidate-pair') n[r.state] = (n[r.state] || 0) + 1; });
+    const line = 'пары кандидатов: ' + (Object.entries(n).map(([k, v]) => k + '×' + v).join(', ') || 'нет');
+    if (line !== prev) { dlog(line); prev = line; }
+  }, 2000);
+}
+async function logPair(p) {   // какая пара адресов в итоге победила
+  const st = await p.getStats(), by = {}; st.forEach(r => { by[r.id] = r; });
+  const f = c => c ? `${c.candidateType} ${c.address || c.ip}:${c.port}` : '?';
+  st.forEach(r => { if (r.type === 'candidate-pair' && r.nominated && r.state === 'succeeded') dlog(`выбрана пара: ${f(by[r.localCandidateId])} ↔ ${f(by[r.remoteCandidateId])}`); });
 }
 const sendOn = (ch, d) => ch && ch.readyState === 'open' && ch.send(d);
 const sendG = m => sendOn(chG, JSON.stringify(m)), sendC = s => sendOn(chC, s);
 
 /* Chrome прячет локальные IP за mDNS (*.local), пока страница не получала доступ к камере. Камера нужна и для сканирования */
-const warmCamera = () => hasCam ? navigator.mediaDevices.getUserMedia({ video: true }).then(stopTracks, () => {}) : Promise.resolve();
+async function warmCamera() {
+  if (!hasCam) return;
+  try { stopTracks(await navigator.mediaDevices.getUserMedia({ video: true })); dlog('камера разрешена: в кандидатах будут реальные IP'); }
+  catch (e) { dlog(`камера недоступна (${e.name}): в кандидатах будут mDNS-имена *.local`); }
+}
 
 /* ждём ICE-кандидатов: complete, либо 500 мс тишины после первого, либо 3 с */
 const gathered = p => new Promise(res => {
   let n = 0, last = Date.now(); const t0 = last;
-  p.onicecandidate = e => { if (e.candidate) { n++; last = Date.now(); } };
+  p.onicecandidate = e => { if (e.candidate) { n++; last = Date.now(); dlog('свой кандидат: ' + e.candidate.candidate.replace(/^candidate:\S+ \d+ (\w+) \d+ (\S+) (\d+) typ (\w+).*$/, '$4 $1 $2:$3')); } };
   const iv = setInterval(() => {
     const now = Date.now();
-    if (p.iceGatheringState === 'complete' || now - t0 > ICE_MAX || (n && now - last > ICE_IDLE)) { clearInterval(iv); p.onicecandidate = null; res(); }
+    if (p.iceGatheringState === 'complete' || now - t0 > ICE_MAX || (n && now - last > ICE_IDLE)) { clearInterval(iv); p.onicecandidate = null; dlog(`сбор кандидатов закончен: ${n} шт.${n ? '' : ' — ни одного! Расширение или политика браузера блокирует WebRTC?'}`); res(); }
   }, 50);
 });
 async function setLocal(p, desc) {   // p передаём явно: пока ждём, пользователь мог начать заново, и глобальный pc уже другой
@@ -319,7 +393,9 @@ async function setLocal(p, desc) {   // p передаём явно: пока ж
   try { await p.setLocalDescription({ type: desc.type, sdp: Codec.munge(desc.sdp) }); }
   catch (e) { await p.setLocalDescription(desc); }   // браузер не дал подменить ICE-креды — они уйдут в код как есть
   await wait;
-  return Codec.toB32(Codec.encode(p.localDescription.sdp));
+  const bytes = Codec.encode(p.localDescription.sdp), code = Codec.toB32(bytes);
+  dlog(`наш код: ${code.length} символов, кандидаты в нём: ${fmtCands(Codec.decodeFields(bytes).cands)}`);
+  return code;
 }
 async function makeOffer(alive) {
   await warmCamera();
@@ -330,9 +406,14 @@ async function makeOffer(alive) {
 async function takeOffer(f) {
   const p = netInit();
   await p.setRemoteDescription({ type: 'offer', sdp: Codec.buildSdp(f) });
+  watchStats(p);   // пары кандидатов появятся только когда известны оба описания
   return setLocal(p, await p.createAnswer());
 }
-const takeAnswer = f => pc.setRemoteDescription({ type: 'answer', sdp: Codec.buildSdp(f, Codec.parseSdp(pc.localDescription.sdp).mid) });
+async function takeAnswer(f) {
+  const p = pc;
+  await p.setRemoteDescription({ type: 'answer', sdp: Codec.buildSdp(f, Codec.parseSdp(p.localDescription.sdp).mid) });
+  watchStats(p);
+}
 
 /* ====== мастер подключения ====== */
 const norm = s => String(s).normalize('NFKC').toUpperCase().replace(/[^A-Z0-9]/g, '');   // пробелы, \n, NBSP, нижний регистр, мусор
@@ -347,6 +428,10 @@ const S = { role: null, step: 'home', timeout: 20000, tok: 0, tick: 0, err: null
 const roleSteps = { host: ['h-show', 'h-scan', 'connect'], client: ['c-scan', 'c-show'] };
 const card = $('#card');
 
+async function copyTo(btn, text, failMsg) {   // копирует и на 1.8 с меняет подпись кнопки
+  const ok = await copyText(text); btn.textContent = ok ? 'Скопировано ✓' : failMsg;
+  setTimeout(() => btn.textContent = 'Скопировать', 1800); return ok;
+}
 async function copyText(text) {
   try { if (navigator.clipboard && hasSecure) { await navigator.clipboard.writeText(text); return true; } } catch (e) {}
   const ta = document.createElement('textarea'); ta.value = text; ta.readOnly = true;
@@ -438,7 +523,7 @@ $('#back').onclick = resetAll;
 
 /* Ошибка на любом шаге и обрыв до начала игры -> экран «Не удалось соединиться» */
 const netDown = () => G ? showLost('Связь потеряна') : go('fail');
-const fail = e => { S.err = e; go('fail'); };
+const fail = e => { dlog('ошибка: ' + (e.message || e)); S.err = e; go('fail'); };
 function run(job, ok) {   // результат асинхронной работы применяем, только если пользователь не ушёл с экрана
   const tok = S.tok, alive = () => tok === S.tok;
   job(alive).then(v => alive() && ok(v), e => alive() && fail(e));
@@ -463,10 +548,7 @@ function showView(code, { title, lead, tail, next, nextLabel }) {
     vis.innerHTML = `<div class="box"><output class="code" tabindex="0" aria-label="Код для ввода вручную">${fmt(code)}</output>
       <button class="btn" id="copy">Скопировать</button>
       <p class="meter">${code.length} символов${hasSecure ? '' : ' · выделите текст и скопируйте вручную'}</p></div>`;
-    $('#copy').onclick = async e => {
-      const ok = await copyText(code); e.target.textContent = ok ? 'Скопировано ✓' : 'Выделите и скопируйте';
-      live(ok ? 'Код скопирован' : 'Не удалось скопировать автоматически'); setTimeout(() => e.target.textContent = 'Скопировать', 1800);
-    };
+    $('#copy').onclick = async e => live(await copyTo(e.target, code, 'Выделите и скопируйте') ? 'Код скопирован' : 'Не удалось скопировать автоматически');
   };
   paintQR();
   card.querySelectorAll('.seg button').forEach(b => b.onclick = () => {
@@ -494,13 +576,16 @@ function scanView({ title, lead, want, onCode }) {
     try { f = parseCode(text, want); }
     catch (e) {
       const show = !quiet || e.message === 'type';   // при наборе молчим про «не код», но чужой полный код — однозначная ошибка
-      if (show && text !== bad) note(e.message === 'type'
-        ? (want === 'offer' ? 'Это ответный код. Здесь нужен код того, кто нажал «Создать игру».' : 'Это код хозяина. Здесь нужен ответный код второго игрока.')
-        : 'Это не код игры. Нужен QR-код или код из этого же приложения на втором телефоне.');
+      if (show && text !== bad) {
+        dlog('код отвергнут: ' + e.message);
+        note(e.message === 'type'
+          ? (want === 'offer' ? 'Это ответный код. Здесь нужен код того, кто нажал «Создать игру».' : 'Это код хозяина. Здесь нужен ответный код второго игрока.')
+          : 'Это не код игры. Нужен QR-код или код из этого же приложения на втором телефоне.');
+      }
       if (show) bad = text;
       return false;
     }
-    done = true; stopCam(); live('Код принят'); onCode(f); return true;
+    done = true; stopCam(); live('Код принят'); dlog(`принят код (${f.type}), кандидаты соперника: ${fmtCands(f.cands)}`); onCode(f); return true;
   };
   const mode = async m => {
     stopCam(); act.replaceChildren(); aux.replaceChildren();
@@ -512,6 +597,7 @@ function scanView({ title, lead, want, onCode }) {
       try { await startCam($('video'), accept); }
       catch (e) {
         if (tok !== S.tok) return;   // пока камера отказывала, пользователь уже переключил режим
+        dlog('камера для сканирования: ' + e.kind);
         const [t, d] = camMsg[e.kind] || camMsg.busy;
         $('#ph').hidden = false; $('#ph').innerHTML = `<b>${t}</b><span>${d}</span>`;
         $('video').hidden = $('.vf').hidden = true;
@@ -559,7 +645,7 @@ function connectView() {
   mount();
   S.tick = setInterval(() => {
     const e = Date.now() - t0; $('#bar').style.width = Math.min(100, e / S.timeout * 100) + '%';
-    if (e >= S.timeout) go('fail');
+    if (e >= S.timeout) { dlog('таймаут соединения'); go('fail'); }
   }, 200);
 }
 function failView() {
@@ -574,7 +660,8 @@ function failView() {
       <li><b>VPN и экономия трафика.</b> Выключите на обоих.</li>
       <li><b>iPhone:</b> Настройки → браузер → разрешите «Локальную сеть».</li>
       <li><b>Коды одноразовые.</b> После новой попытки нужны новые коды.</li>
-    </ul></div>
+    </ul>
+    <p>Не помогло? Нажмите «Лог» вверху экрана, скопируйте текст и пришлите — по нему видно, на каком шаге остановилось соединение.</p></div>
   <div class="actions"><button class="btn primary" id="again">Попробовать снова</button><button class="btn" id="fresh">Выбрать роль заново</button></div>`;
   mount();
   if (err) $('#lead').textContent = 'Что-то пошло не так: ' + (err.message || err);
@@ -632,7 +719,7 @@ const C = {
   K: 1.05,            // ускорение на каждом ударе, без потолка
   MAXANG: 55 * Math.PI / 180, STEP: 1 / 120, MAXF: 0.1, COUNT: 3, MAXIT: 64
 };
-const PHASE = { WAIT: 0, COUNT: 1, PLAY: 2, PAUSE: 3 };
+const PHASE = { WAIT: 0, COUNT: 1, PLAY: 2, PAUSE: 3, AWAY: 4 };   // PAUSE — игрок нажал паузу, AWAY — кто-то свернул вкладку
 const planeB = C.H - C.GAP - C.PH - C.R, planeT = C.GAP + C.PH + C.R;   // где центр мяча касается ракетки
 const clampPad = x => Math.max(C.PW / 2, Math.min(C.W - C.PW / 2, x));
 const r1 = v => Math.round(v * 10) / 10;
@@ -667,16 +754,24 @@ function advance(b, dt, pads, evs) {
 }
 
 let G = null, raf = 0, ovKey = '';
+const canPause = () => G.phase === PHASE.COUNT || G.phase === PHASE.PLAY;
+const pauseEl = $('#pause'), dimEl = $('#dim'), pbtn = $('#pausebtn');
+const css = getComputedStyle(document.documentElement), PANEL_W = parseFloat(css.getPropertyValue('--pw')), BTN = parseFloat(css.getPropertyValue('--pbs'));
 const DASH = [8, 8], NODASH = [];
 const cv = $('#cv'), g = cv.getContext('2d', { alpha: false }), fit = { s: 1, ox: 0, oy: 0, dpr: 1, left: 0 };
 
-function startCountdown() { G.phase = PHASE.COUNT; G.cd = C.COUNT; Object.assign(G.ball, { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }); G.dirty = true; }
+function countdown() { G.phase = PHASE.COUNT; G.cd = C.COUNT; G.dirty = true; }
+function startCountdown() { Object.assign(G.ball, { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }); countdown(); }   // новая подача: мяч в центр
 function launch() {   // подача на проигравшего, угол 8..30° от вертикали, скорость строго V0
   const a = (Math.random() < .5 ? -1 : 1) * (8 + Math.random() * 22) * Math.PI / 180;
   G.ball.vx = C.V0 * Math.sin(a); G.ball.vy = G.serveDir * C.V0 * Math.cos(a); G.phase = PHASE.PLAY; G.cd = 0; G.dirty = true;
 }
 function step(dt) {   // один фиксированный шаг физики (хост)
-  if (G.phase === PHASE.COUNT) { G.cd -= dt; if (G.cd <= 0) launch(); return; }
+  if (G.phase === PHASE.COUNT) {
+    G.cd -= dt;
+    if (G.cd <= 0) { if (G.ball.vy) { G.phase = PHASE.PLAY; G.dirty = true; } else launch(); }   // vy != 0 — розыгрыш прервала пауза: продолжаем с того же места
+    return;
+  }
   if (G.phase !== PHASE.PLAY) return;
   const evs = []; advance(G.ball, dt, G.pads, evs);
   if (evs.length) G.dirty = true;
@@ -685,21 +780,23 @@ function step(dt) {   // один фиксированный шаг физики
     else if (e === 'goalT') { G.score[0]++; G.serveDir = -1; startCountdown(); }
   }
 }
-function updatePause() {   // хост: пауза, пока кто-то из игроков свернул вкладку
+function updatePause() {   // хост: игра стоит, пока кто-то нажал паузу (G.paused) или свернул вкладку
   if (G.phase === PHASE.WAIT) return;
-  if (G.foeAway || document.hidden) { if (G.phase !== PHASE.PAUSE) { G.phase = PHASE.PAUSE; G.dirty = true; } }
-  else if (G.phase === PHASE.PAUSE) startCountdown();
+  const want = G.paused ? PHASE.PAUSE : (G.foeAway || document.hidden) ? PHASE.AWAY : null, stopped = G.phase >= PHASE.PAUSE;
+  if (want) { if (G.phase !== want) { G.phase = want; G.dirty = true; } }
+  else if (stopped) countdown();   // отсчёт 3-2-1 и дальше с того же места
 }
 
 /* сообщения: состояние (хост -> клиент) [seq, bx, by, vx, vy, hostPad, phase, scoreHost, scoreClient, cd]; ввод (клиент -> хост) [pad] в системе координат хоста */
 function onState(m) {
-  if (G.host) { G.pads.top = clampPad(m[0]); if (G.phase === PHASE.WAIT) startCountdown(); return; }   // первый пакет клиента = клиент в игре
+  if (G.host) { G.pads.top = clampPad(m[0]); if (G.phase === PHASE.WAIT) { startCountdown(); updatePause(); } return; }   // первый пакет клиента = клиент в игре (если хост уже на паузе — она применится сразу)
   if (m[0] <= G.seq) return;   // канал без порядка: устаревший пакет
   [G.seq, G.ball.x, G.ball.y, G.ball.vx, G.ball.vy, G.pads.bot, G.phase, G.score[0], G.score[1], G.cd] = m;
 }
 function onControl(s) {
   if (s === 'bye') showLost('Соперник вышел из игры');
-  else { G.foeAway = s === 'away'; if (G.host) updatePause(); }   // 'away' | 'back'
+  else if (G.host && (s === 'pause' || s === 'resume')) requestPause(s === 'pause');
+  else if (s === 'away' || s === 'back') { G.foeAway = s === 'away'; if (G.host) updatePause(); }
 }
 function sendState() {
   const b = G.ball; G.dirty = false;
@@ -707,7 +804,7 @@ function sendState() {
 }
 function netTick(now) {
   if (!G.foeAway && now - G.rx > 4000) return showLost('Связь потеряна');   // соперник свернул вкладку — молчать можно долго
-  if (G.host) { if (G.dirty || now - G.lastSend >= 33) { sendState(); G.lastSend = now; } }
+  if (G.host) { if (G.dirty || now - G.lastSend >= (canPause() ? 33 : 250)) { sendState(); G.lastSend = now; } }   // пока игра стоит, шлём редко
   else if (G.pads.top !== G.sentPad || now - G.lastSend >= 200) { sendG([r1(G.pads.top)]); G.sentPad = G.pads.top; G.lastSend = now; }
 }
 
@@ -716,6 +813,16 @@ function resize() {
   const w = Math.round(r.width * dpr), h = Math.round(r.height * dpr);
   if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }   // присваивание сбрасывает буфер — только при смене размера
   Object.assign(fit, { s, dpr, left: r.left, ox: (r.width - C.W * s) / 2, oy: (r.height - C.H * s) / 2 });
+  placeUI(r);
+}
+/* Кнопка паузы и панель паузы: в пустых полях рядом с полем, если там хватает места, иначе поверх поля по центру */
+function placeUI(r) {
+  const fieldR = r.left + fit.ox + C.W * fit.s, room = fit.ox, gap = 8;
+  pauseEl.style.left = room >= PANEL_W + 24 ? fieldR + room / 2 + 'px' : '';   // центр правого поля; иначе центр экрана (по умолчанию в CSS)
+  let x = fieldR - BTN - 6, y = r.top + r.height / 2 - BTN / 2, over = true;   // нет места ни сбоку, ни сверху: поверх поля у края на средней линии
+  if (room >= BTN + 2 * gap) { x = fieldR + (room - BTN) / 2; over = false; }
+  else if (fit.oy >= BTN + 2 * gap) { x = fieldR - BTN - gap; y = r.top + (fit.oy - BTN) / 2; over = false; }
+  pbtn.style.left = x + 'px'; pbtn.style.top = y + 'px'; pbtn.classList.toggle('over', over);
 }
 new ResizeObserver(() => { if (G) resize(); }).observe(cv);
 
@@ -734,16 +841,38 @@ function setOv(big, txt, btn) {   // txt === null — скрыть
   $('#ov').hidden = txt === null; $('#ovbig').textContent = big || ''; $('#ovtxt').textContent = txt || ''; $('#ovbtn').hidden = !btn;
   if (btn) $('#ovbtn').focus();
 }
-function showLost(msg) { if (!G || G.lost) return; G.lost = true; cancelAnimationFrame(raf); setOv('', msg, true); }
+function showLost(msg) { if (!G || G.lost) return; dlog('игра остановлена: ' + msg); G.lost = true; hidePauseUI(); cancelAnimationFrame(raf); setOv('', msg, true); }
 function exitGame() { G = null; cancelAnimationFrame(raf); $('#game').hidden = true; $('#app').hidden = false; resetAll(); }
 $('#ovbtn').onclick = exitGame;
 
+/* пауза: ставит и снимает любой игрок. Решает хост (G.paused); клиент просит по каналу событий */
+function requestPause(on) { if (G.host) { G.paused = on; updatePause(); } else sendC(on ? 'pause' : 'resume'); }
+function hidePauseUI() { pauseEl.hidden = dimEl.hidden = pbtn.hidden = true; }
+function setPauseUI() {
+  const can = canPause(), on = G.phase === PHASE.PAUSE;
+  if (pbtn.hidden === can) pbtn.hidden = !can;
+  if (pauseEl.hidden === !on) return;   // панель уже в нужном состоянии
+  pauseEl.hidden = dimEl.hidden = !on;
+  if (!on) return;
+  const me = G.score[G.host ? 0 : 1], foe = G.score[G.host ? 1 : 0];
+  $('#psme').textContent = me; $('#psfoe').textContent = foe;
+  $('#plead').textContent = me === foe ? 'Ничья' : me > foe ? 'Вы выигрываете' : 'Соперник выигрывает';
+  $('#presume').focus();
+}
+pbtn.onclick = () => requestPause(true);
+$('#presume').onclick = () => requestPause(false);
+$('#pexit').onclick = () => { sendC('bye'); setTimeout(exitGame, 120); };   // даём 'bye' уйти, пока соединение не закрыто
+addEventListener('keydown', e => {   // Esc или P (по коду клавиши — работает и в русской раскладке)
+  if (!G || G.lost || e.repeat || (e.code !== 'Escape' && e.code !== 'KeyP')) return;
+  if (G.phase === PHASE.PAUSE) requestPause(false); else if (canPause()) requestPause(true);
+});
+
 function startGame(host) {
   $('#app').hidden = true; $('#game').hidden = false; resize();
-  G = { host, me: host ? 'bot' : 'top', phase: PHASE.WAIT, cd: 0, score: [0, 0], serveDir: 1, seq: 0, dirty: false, lost: false, foeAway: false,
+  G = { host, me: host ? 'bot' : 'top', phase: PHASE.WAIT, cd: 0, score: [0, 0], serveDir: 1, seq: 0, dirty: false, lost: false, foeAway: false, paused: false,
     ball: { x: C.W / 2, y: C.H / 2, vx: 0, vy: 0 }, pads: { bot: C.W / 2, top: C.W / 2 }, oppX: C.W / 2,   // oppX — сглаженная ракетка соперника
     rx: performance.now(), last: performance.now(), acc: 0, lastSend: 0, sentPad: -1 };
-  ovKey = '';
+  ovKey = ''; hidePauseUI();
   $('#hint').classList.remove('off'); setTimeout(() => $('#hint').classList.add('off'), 4000);
   cancelAnimationFrame(raf); raf = requestAnimationFrame(frame);
 }
@@ -758,9 +887,15 @@ function frame(now) {
   netTick(now);
   if (G.lost) return;
   if (G.phase === PHASE.COUNT) setOv(Math.ceil(G.cd), 'Приготовьтесь');
-  else if (G.phase === PHASE.PAUSE) setOv('', 'Пауза');
+  else if (G.phase === PHASE.AWAY) setOv('', 'Пауза: соперник свернул игру');
   else if (G.phase === PHASE.WAIT) setOv('', 'Ждём соперника…');
   else setOv('', null);
+  setPauseUI();
+  if (G.phase >= PHASE.PAUSE) {   // игра стоит: перерисовываем, только если что-то изменилось (экономит батарею на долгой паузе)
+    const sig = [G.ball.x, G.ball.y, G.pads[G.me], G.oppX.toFixed(1), G.score, cv.width, cv.height, fit.s, fit.ox].join();
+    if (sig === G.sig) return;
+    G.sig = sig;
+  } else G.sig = '';
   draw();
 }
 
