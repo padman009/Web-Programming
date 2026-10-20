@@ -359,8 +359,10 @@ function watchStats(p) {   // пока соединяемся, раз в 2 с к
   let prev = '';
   const iv = setInterval(async () => {
     if (p !== pc || ['connected', 'closed'].includes(p.connectionState)) return clearInterval(iv);
-    const n = {}; (await p.getStats()).forEach(r => { if (r.type === 'candidate-pair') n[r.state] = (n[r.state] || 0) + 1; });
-    const line = 'пары кандидатов: ' + (Object.entries(n).map(([k, v]) => k + '×' + v).join(', ') || 'нет');
+    const n = {}, t = { requestsSent: 0, responsesReceived: 0, requestsReceived: 0 };
+    (await p.getStats()).forEach(r => { if (r.type === 'candidate-pair') { n[r.state] = (n[r.state] || 0) + 1; for (const k in t) t[k] += r[k] || 0; } });
+    const line = 'пары кандидатов: ' + (Object.entries(n).map(([k, v]) => k + '×' + v).join(', ') || 'нет')   // «отправлено/ответов/получено» показывают, доходят ли пакеты в каждую сторону
+      + (Object.keys(n).length ? `; проверок отправлено ${t.requestsSent}, ответов получено ${t.responsesReceived}, проверок получено ${t.requestsReceived}` : '');
     if (line !== prev) { dlog(line); prev = line; }
   }, 2000);
 }
@@ -373,10 +375,13 @@ const sendOn = (ch, d) => ch && ch.readyState === 'open' && ch.send(d);
 const sendG = m => sendOn(chG, JSON.stringify(m)), sendC = s => sendOn(chC, s);
 
 /* Chrome прячет локальные IP за mDNS (*.local), пока страница не получала доступ к камере. Камера нужна и для сканирования */
-async function warmCamera() {
+async function warmCamera() {   // доступ к камере, а если её нет (ноутбук) — к микрофону: тоже снимает mDNS-маскировку
   if (!hasCam) return;
-  try { stopTracks(await navigator.mediaDevices.getUserMedia({ video: true })); dlog('камера разрешена: в кандидатах будут реальные IP'); }
-  catch (e) { dlog(`камера недоступна (${e.name}): в кандидатах будут mDNS-имена *.local`); }
+  for (const [kind, ok, bad] of [['video', 'камера разрешена', 'камера недоступна'], ['audio', 'микрофон разрешён', 'микрофон недоступен']]) {
+    try { stopTracks(await navigator.mediaDevices.getUserMedia({ [kind]: true })); return dlog(ok + ': в кандидатах будут реальные IP'); }
+    catch (e) { dlog(`${bad} (${e.name})`); if (e.name !== 'NotFoundError') break; }   // отказал пользователь — микрофон не просим
+  }
+  dlog('в кандидатах будут mDNS-имена *.local: второму устройству нужен multicast, чтобы их разрешить');
 }
 
 /* ждём ICE-кандидатов: complete, либо 500 мс тишины после первого, либо 3 с */
